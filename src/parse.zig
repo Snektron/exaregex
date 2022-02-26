@@ -24,6 +24,9 @@ pub fn parse(a: Allocator, source: []const u8) Allocator.Error!ParseResult {
             error.UnbalancedClosingParen => .unbalanced_closing_paren,
             error.InvalidAtom => .expected_atom,
             error.StrayRepeat => .stray_repeat,
+            error.InvalidEscape => .invalid_escape,
+            error.InvalidEscapeUnexpectedEnd => .invalid_escape_unexpected_end,
+            error.InvalidEscapeHexDigit => .invalid_escape_hex_digit,
         };
         return ParseResult{.err = .{
             .offset = parser.offset,
@@ -51,18 +54,22 @@ pub const Error = struct {
         unbalanced_closing_paren,
         expected_atom,
         stray_repeat,
+        invalid_escape,
+        invalid_escape_unexpected_end,
+        invalid_escape_hex_digit,
     };
 };
 
 const Parser = struct {
     const ParseError = error {
         OutOfMemory,
-        /// Encountered an open paren with no corresponding open paren.
         UnbalancedOpenParen,
         UnbalancedClosingParen,
-        /// Expected an atom character (literal, ., (, [) but found something else.
         InvalidAtom,
         StrayRepeat,
+        InvalidEscape,
+        InvalidEscapeUnexpectedEnd,
+        InvalidEscapeHexDigit,
     };
 
     a: Allocator,
@@ -211,7 +218,7 @@ const Parser = struct {
                 return Node.any_not_nl;
             },
             '[' => unreachable, // TODO: Character set.
-            '\\' => unreachable, // TODO: Escape.
+            '\\' => return Node{.char = try self.escape()},
             '(' => {
                 const open_offset = self.offset;
                 self.consume();
@@ -232,6 +239,44 @@ const Parser = struct {
                 return error.InvalidAtom;
             }
         }
+    }
+
+    fn escape(self: *Parser) !u8 {
+        std.debug.assert(self.peek().? == '\\');
+        self.consume();
+        const c = self.peek() orelse return error.InvalidEscapeUnexpectedEnd;
+        const escaped: u8 = switch (c) {
+            'n' => '\n',
+            'r' => '\r',
+            't' => '\t',
+            '\\' => '\\',
+            '\'' => '\'',
+            '"' => '"',
+            '-' => '-',
+            '^' => '^',
+            '$' => '$',
+            'x' => {
+                self.consume();
+                const hi = try self.hex();
+                const lo = try self.hex();
+                return hi * 16 + lo;
+            },
+            else => return error.InvalidEscape,
+        };
+        self.consume();
+        return escaped;
+    }
+
+    fn hex(self: *Parser) !u8 {
+        const c = self.peek() orelse return error.InvalidEscape;
+        const digit = switch (c) {
+            'a'...'f' => c - 'a' + 10,
+            'A'...'F' => c - 'A' + 10,
+            '0'...'9' => c - '0',
+            else => return error.InvalidEscapeHexDigit,
+        };
+        self.consume();
+        return digit;
     }
 };
 
@@ -298,4 +343,20 @@ test "parser: unbalanced closing paren" {
 test "parser: empty edge cases" {
     var result = try parse(std.testing.allocator, "|(||)*|");
     defer result.ast.deinit(std.testing.allocator);
+}
+
+test "parser: escape sequences" {
+    const result = try parse(std.testing.allocator, "\\n\\\"\\'\\-\\x123");
+    var ast = result.ast;
+    defer ast.deinit(std.testing.allocator);
+
+    const root = ast.nodes[Ast.Root].sequence;
+    const nodes = ast.nodes[root.first_child .. root.first_child + root.num_children];
+    try testing.expect(nodes.len == 6);
+    try testing.expect(nodes[0].char == '\n');
+    try testing.expect(nodes[1].char == '"');
+    try testing.expect(nodes[2].char == '\'');
+    try testing.expect(nodes[3].char == '-');
+    try testing.expect(nodes[4].char == '\x12');
+    try testing.expect(nodes[5].char == '3');
 }
