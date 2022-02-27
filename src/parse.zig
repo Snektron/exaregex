@@ -249,12 +249,7 @@ const Parser = struct {
             'n' => '\n',
             'r' => '\r',
             't' => '\t',
-            '\\' => '\\',
-            '\'' => '\'',
-            '"' => '"',
-            '-' => '-',
-            '^' => '^',
-            '$' => '$',
+            '\\', '\'', '"', '-', '^', '$', '(', ')', '[', ']' => c,
             'x' => {
                 self.consume();
                 const hi = try self.hex();
@@ -281,7 +276,7 @@ const Parser = struct {
 };
 
 test "parser: basic" {
-    const result = try parse(std.testing.allocator, "ab*|(d?e)+");
+    const result = try parse(std.testing.allocator, "a.*|(d?e)+");
     var ast = result.ast;
     defer ast.deinit(std.testing.allocator);
 
@@ -289,20 +284,20 @@ test "parser: basic" {
     try testing.expect(root == .alternation);
     try testing.expect(root.alternation.num_children == 2);
 
-    const @"ab*" = ast.nodes[root.alternation.first_child];
-    try testing.expect(@"ab*" == .sequence);
-    try testing.expect(@"ab*".sequence.num_children == 2);
+    const @"a.*" = ast.nodes[root.alternation.first_child];
+    try testing.expect(@"a.*" == .sequence);
+    try testing.expect(@"a.*".sequence.num_children == 2);
 
-    const @"a" = ast.nodes[@"ab*".sequence.first_child];
+    const @"a" = ast.nodes[@"a.*".sequence.first_child];
     try testing.expect(@"a".char == 'a');
 
-    const @"b*" = ast.nodes[@"ab*".sequence.first_child + 1];
-    try testing.expect(@"b*" == .repeat);
-    try testing.expect(@"b*".repeat.min == 0);
-    try testing.expect(@"b*".repeat.max == 0);
+    const @".*" = ast.nodes[@"a.*".sequence.first_child + 1];
+    try testing.expect(@".*" == .repeat);
+    try testing.expect(@".*".repeat.min == 0);
+    try testing.expect(@".*".repeat.max == 0);
 
-    const @"b" = ast.nodes[@"b*".repeat.child];
-    try testing.expect(@"b".char == 'b');
+    const @"." = ast.nodes[@".*".repeat.child];
+    try testing.expect(@"." == .any_not_nl);
 
     const @"(d?e)+" = ast.nodes[root.alternation.first_child + 1];
     try testing.expect(@"(d?e)+" == .repeat);
