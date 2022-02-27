@@ -1,44 +1,55 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
 const testing = std.testing;
 
 const Ast = @import("Ast.zig");
 const Node = Ast.Node;
 const Index = Node.Index;
+const CharSet = @import("CharSet.zig");
+const CharRange = CharSet.Range;
 
 pub fn parse(a: Allocator, source: []const u8) Allocator.Error!ParseResult {
     var parser = Parser{
         .a = a,
         .source = source,
-        .offset = 0,
-        .nodes = .{},
-        .tmp_nodes = .{},
+        .extra_data_arena = ArenaAllocator.init(a),
     };
     defer parser.nodes.deinit(a);
     defer parser.tmp_nodes.deinit(a);
+    defer parser.current_char_range.deinit(a);
+    var deinit_arena = true;
+    defer if (deinit_arena) parser.extra_data_arena.deinit();
 
     parser.parse() catch |err| {
-        const tag: Error.Tag = switch (err) {
+        const parse_err = switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            error.UnbalancedOpenParen => .unbalanced_open_paren,
-            error.UnbalancedClosingParen => .unbalanced_closing_paren,
-            error.InvalidAtom => .expected_atom,
-            error.StrayRepeat => .stray_repeat,
-            error.InvalidEscape => .invalid_escape,
-            error.InvalidEscapeUnexpectedEnd => .invalid_escape_unexpected_end,
-            error.InvalidEscapeHexDigit => .invalid_escape_hex_digit,
+            else => |parse_err| parse_err,
         };
         return ParseResult{.err = .{
             .offset = parser.offset,
-            .tag = tag,
+            .err = parse_err,
         }};
     };
+
+    deinit_arena = false;
 
     std.debug.assert(parser.offset == source.len);
     return ParseResult{.ast = .{
         .nodes = parser.nodes.toOwnedSlice(a),
+        .extra_data_arena = parser.extra_data_arena.state,
     }};
 }
+
+pub const ParseError = error {
+    UnbalancedOpenParen,
+    UnbalancedClosingParen,
+    InvalidAtom,
+    StrayRepeat,
+    InvalidEscape,
+    InvalidEscapeUnexpectedEnd,
+    InvalidEscapeHexDigit,
+};
 
 pub const ParseResult = union(enum) {
     ast: Ast,
@@ -47,36 +58,19 @@ pub const ParseResult = union(enum) {
 
 pub const Error = struct {
     offset: usize,
-    tag: Tag,
-
-    pub const Tag = enum {
-        unbalanced_open_paren,
-        unbalanced_closing_paren,
-        expected_atom,
-        stray_repeat,
-        invalid_escape,
-        invalid_escape_unexpected_end,
-        invalid_escape_hex_digit,
-    };
+    err: ParseError,
 };
 
 const Parser = struct {
-    const ParseError = error {
-        OutOfMemory,
-        UnbalancedOpenParen,
-        UnbalancedClosingParen,
-        InvalidAtom,
-        StrayRepeat,
-        InvalidEscape,
-        InvalidEscapeUnexpectedEnd,
-        InvalidEscapeHexDigit,
-    };
+    const Error = ParseError || Allocator.Error;
 
     a: Allocator,
     source: []const u8,
-    offset: usize,
-    nodes: std.ArrayListUnmanaged(Node),
-    tmp_nodes: std.ArrayListUnmanaged(Node),
+    offset: usize = 0,
+    nodes: std.ArrayListUnmanaged(Node) = .{},
+    tmp_nodes: std.ArrayListUnmanaged(Node) = .{},
+    current_char_range: CharSet.Mutable = .{.invert = false},
+    extra_data_arena: ArenaAllocator,
 
     fn addNode(self: *Parser, node: Node) !Index {
         const index = @intCast(Index, self.nodes.items.len);
@@ -110,7 +104,7 @@ const Parser = struct {
         return false;
     }
 
-    fn parse(self: *Parser) ParseError!void {
+    fn parse(self: *Parser) Parser.Error!void {
         // Reserve some space for the root - its always present (provided no error happens)
         // and we always want to have it at index 0.
         try self.nodes.append(self.a, undefined);
@@ -123,7 +117,7 @@ const Parser = struct {
         self.nodes.items[0] = root;
     }
 
-    fn alternation(self: *Parser) ParseError!Node {
+    fn alternation(self: *Parser) Parser.Error!Node {
         const tmp_offset = self.tmp_nodes.items.len;
         defer self.tmp_nodes.items.len = tmp_offset;
 
@@ -319,19 +313,19 @@ test "parser: basic" {
 
 test "parser: stray repeat" {
     const result = try parse(std.testing.allocator, "aa**bb");
-    try testing.expect(result.err.tag == .stray_repeat);
+    try testing.expect(result.err.err == error.StrayRepeat);
     try testing.expect(result.err.offset == 3);
 }
 
 test "parser: unbalanced open paren" {
     const result = try parse(std.testing.allocator, "py()(()th()n");
-    try testing.expect(result.err.tag == .unbalanced_open_paren);
+    try testing.expect(result.err.err == error.UnbalancedOpenParen);
     try testing.expect(result.err.offset == 4);
 }
 
 test "parser: unbalanced closing paren" {
     const result = try parse(std.testing.allocator, "py(())()th)n");
-    try testing.expect(result.err.tag == .unbalanced_closing_paren);
+    try testing.expect(result.err.err == error.UnbalancedClosingParen);
     try testing.expect(result.err.offset == 10);
 }
 

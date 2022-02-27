@@ -7,4 +7,5 @@ pub fn main() !void {
 
 test "main" {
     _ = @import("parse.zig");
+    _ = @import("CharSet.zig");
 }

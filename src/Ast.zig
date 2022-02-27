@@ -2,8 +2,10 @@ const Ast = @This();
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const ArenaAllocator = std.heap.ArenaAllocator;
 
 nodes: []Node,
+extra_data_arena: ArenaAllocator.State,
 
 pub const Root: Node.Index = 0;
 
@@ -32,4 +34,5 @@ pub const Node = union(enum) {
 
 pub fn deinit(self: *Ast, a: Allocator) void {
     a.free(self.nodes);
+    self.extra_data_arena.promote(a).deinit();
 }
