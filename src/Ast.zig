@@ -3,6 +3,7 @@ const Ast = @This();
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
+const CharSet = @import("CharSet.zig");
 
 nodes: []Node,
 extra_data_arena: ArenaAllocator.State,
@@ -26,7 +27,7 @@ pub const Node = union(enum) {
     empty,
     any_not_nl, // '.'
     char: u8,
-    char_set, // TODO
+    char_set: *CharSet,
     sequence: NodeSeq,
     alternation: NodeSeq,
     repeat: Repeat,

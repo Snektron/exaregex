@@ -6,48 +6,11 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const testing = std.testing;
 
-/// Range of characters. They are not sorted, but are not overlapping.
-/// If performance becomes a problem we can always do that later. Charsets aren't
-/// expected to be particularly large anyway.
+/// The ranges which make up this char set. They are sorted and non overlapping.
 ranges: []Range = &.{},
 
 /// Invert this range
 invert: bool,
-
-/// This struct represents a char range which is mutable - new entries can be added, at the
-/// expense of some extra memory.
-pub const Mutable = struct {
-    /// Range of characters. They are not sorted, but are not overlapping.
-    ranges: std.ArrayListUnmanaged(Range) = .{},
-    invert: bool,
-
-    pub fn deinit(self: *Mutable, a: Allocator) void {
-        self.ranges.deinit(a);
-        self.* = undefined;
-    }
-
-    pub fn toImmutable(self: Mutable) CharSet {
-        return CharSet{
-            .ranges = self.ranges.items,
-            .invert = self.invert,
-        };
-    }
-
-    pub fn insert(self: *Mutable, a: Allocator, r: Range) !void {
-        for (self.ranges.items) |*current| {
-            if (r.merge(current.*)) |merged| {
-                current.* = merged;
-                return;
-            }
-        }
-
-        try self.ranges.append(a, r);
-    }
-
-    pub fn clear(self: *Mutable) void {
-        self.ranges.items.len = 0;
-    }
-};
 
 pub fn deinit(self: *CharSet, a: Allocator) void {
     a.free(self.ranges);
@@ -71,6 +34,18 @@ pub const Range = struct {
             .min = @minimum(a.min, b.min),
             .max = @maximum(a.max, b.max),
         };
+    }
+
+    /// Order two ranges by start- and end offset.
+    /// [a,b] and [a,c] will return cmp(b, c)
+    /// [a,b] and [c,b] will return cmp(a, a)
+    pub fn cmp(a: Range, b: Range) std.math.Order {
+        if (a.min != b.min) {
+            return std.math.order(a.min, b.min);
+        } else if (a.max != b.max) {
+            return std.math.order(a.max, b.max);
+        }
+        return .eq;
     }
 };
 

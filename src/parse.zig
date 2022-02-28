@@ -10,16 +10,18 @@ const CharSet = @import("CharSet.zig");
 const CharRange = CharSet.Range;
 
 pub fn parse(a: Allocator, source: []const u8) Allocator.Error!ParseResult {
+    var extra_data_arena = ArenaAllocator.init(a);
+    var deinit_arena = true;
+    defer if (deinit_arena) extra_data_arena.deinit();
+
     var parser = Parser{
         .a = a,
         .source = source,
-        .extra_data_arena = ArenaAllocator.init(a),
+        .extra_data_arena = extra_data_arena.allocator(),
     };
     defer parser.nodes.deinit(a);
     defer parser.tmp_nodes.deinit(a);
     defer parser.current_char_range.deinit(a);
-    var deinit_arena = true;
-    defer if (deinit_arena) parser.extra_data_arena.deinit();
 
     parser.parse() catch |err| {
         const parse_err = switch (err) {
@@ -37,18 +39,22 @@ pub fn parse(a: Allocator, source: []const u8) Allocator.Error!ParseResult {
     std.debug.assert(parser.offset == source.len);
     return ParseResult{.ast = .{
         .nodes = parser.nodes.toOwnedSlice(a),
-        .extra_data_arena = parser.extra_data_arena.state,
+        .extra_data_arena = extra_data_arena.state,
     }};
 }
 
 pub const ParseError = error {
     UnbalancedOpenParen,
     UnbalancedClosingParen,
-    InvalidAtom,
+    UnbalancedClosingBracket,
+    InvalidChar,
     StrayRepeat,
     InvalidEscape,
     InvalidEscapeUnexpectedEnd,
     InvalidEscapeHexDigit,
+    UnterminatedCharSet,
+    InvalidCharSetChar,
+    InvalidCharSetRange,
 };
 
 pub const ParseResult = union(enum) {
@@ -69,8 +75,8 @@ const Parser = struct {
     offset: usize = 0,
     nodes: std.ArrayListUnmanaged(Node) = .{},
     tmp_nodes: std.ArrayListUnmanaged(Node) = .{},
-    current_char_range: CharSet.Mutable = .{.invert = false},
-    extra_data_arena: ArenaAllocator,
+    current_char_range: std.ArrayListUnmanaged(CharRange) = .{},
+    extra_data_arena: Allocator,
 
     fn addNode(self: *Parser, node: Node) !Index {
         const index = @intCast(Index, self.nodes.items.len);
@@ -211,8 +217,8 @@ const Parser = struct {
                 self.consume();
                 return Node.any_not_nl;
             },
-            '[' => unreachable, // TODO: Character set.
-            '\\' => return Node{.char = try self.escape()},
+            '[' => return try self.charSet(),
+            ']' => return error.UnbalancedClosingBracket,
             '(' => {
                 const open_offset = self.offset;
                 self.consume();
@@ -226,13 +232,77 @@ const Parser = struct {
             },
             ')', '|' => unreachable, // Handled elsewhere
             '*', '+', '?' => return error.StrayRepeat,
-            else => if (std.ascii.isPrint(c)) {
-                self.consume();
-                return Node{.char = c};
+            else => return Node{.char = try self.maybeEscapedChar()},
+        }
+    }
+
+    fn charSet(self: *Parser) !Node {
+        std.debug.assert(self.peek().? == '[');
+        self.consume();
+        const invert = self.eat('^');
+
+        self.current_char_range.items.len = 0;
+        while (!self.eat(']')) {
+            const min = try self.charSetChar();
+            if (self.eat('-')) {
+                const max_offset = self.offset;
+                const max = try self.charSetChar();
+                if (max < min) {
+                    self.offset = max_offset; // So that the parser points to the max char.
+                    return error.InvalidCharSetRange;
+                }
+                try self.current_char_range.append(self.a, CharSet.range(min, max));
             } else {
-                return error.InvalidAtom;
+                try self.current_char_range.append(self.a, CharSet.singleton(min));
             }
         }
+
+        const Cmp = struct {
+            fn cmp(_: void, a: CharRange, b: CharRange) bool {
+                return CharRange.cmp(a, b) == .lt;
+            }
+        };
+        std.sort.sort(CharRange, self.current_char_range.items, {}, Cmp.cmp);
+
+        const ranges = self.current_char_range.items;
+        var i: usize = 0;
+        for (ranges) |r, j| {
+            if (j == 0) {
+                continue;
+            }
+
+            if (ranges[i].merge(r)) |merged| {
+                ranges[i] = merged;
+            } else {
+                i += 1;
+                ranges[i] = r;
+            }
+        }
+
+        const char_set = try self.extra_data_arena.create(CharSet);
+        char_set.invert = invert;
+        char_set.ranges = try self.extra_data_arena.dupe(CharRange, ranges[0..i+1]);
+
+        return Node{.char_set = char_set};
+    }
+
+    fn charSetChar(self: *Parser) !u8 {
+        const c = self.peek() orelse return error.UnterminatedCharSet;
+        return switch (c) {
+            '[', ']', '-' => error.InvalidCharSetChar,
+            else => return try self.maybeEscapedChar(),
+        };
+    }
+
+    fn maybeEscapedChar(self: *Parser) !u8 {
+        const c = self.peek().?;
+        if (c == '\\') {
+            return try self.escape();
+        } else if (std.ascii.isPrint(c)) {
+            self.consume();
+            return c;
+        }
+        return error.InvalidChar;
     }
 
     fn escape(self: *Parser) !u8 {
@@ -348,4 +418,35 @@ test "parser: escape sequences" {
     try testing.expect(nodes[3].char == '-');
     try testing.expect(nodes[4].char == '\x12');
     try testing.expect(nodes[5].char == '3');
+}
+
+test "parser: char set basics" {
+    const result = try parse(std.testing.allocator, "[^abc-g\\n- x]");
+    var ast = result.ast;
+    defer ast.deinit(std.testing.allocator);
+
+    const set = ast.nodes[Ast.Root].char_set.*;
+    try testing.expect(set.invert);
+    try testing.expect(set.ranges.len == 3);
+    try testing.expectEqual(CharSet.range('\n', ' '), set.ranges[0]);
+    try testing.expectEqual(CharSet.range('a', 'g'), set.ranges[1]);
+    try testing.expectEqual(CharSet.singleton('x'), set.ranges[2]);
+}
+
+test "parser: char set invalid range end" {
+    const result = try parse(std.testing.allocator, "[a-]");
+    try testing.expect(result.err.err == error.InvalidCharSetChar);
+    try testing.expect(result.err.offset == 3);
+}
+
+test "parser: char set invalid range start" {
+    const result = try parse(std.testing.allocator, "[-a]");
+    try testing.expect(result.err.err == error.InvalidCharSetChar);
+    try testing.expect(result.err.offset == 1);
+}
+
+test "parser: char set invalid range" {
+    const result = try parse(std.testing.allocator, "[db-a]");
+    try testing.expect(result.err.err == error.InvalidCharSetRange);
+    try testing.expect(result.err.offset == 4);
 }
