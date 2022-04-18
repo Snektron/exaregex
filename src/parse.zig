@@ -192,17 +192,17 @@ const Parser = struct {
             '*' => .{
                 .child = try self.addNode(child),
                 .min = 0,
-                .max = 0,
+                .max = .infinite,
             },
             '+' => .{
                 .child = try self.addNode(child),
                 .min = 1,
-                .max = 0,
+                .max = .infinite,
             },
             '?' => .{
                 .child = try self.addNode(child),
                 .min = 0,
-                .max = 1,
+                .max = @intToEnum(Node.Repeat.Max, 1),
             },
             else => return child,
         };
@@ -280,8 +280,10 @@ const Parser = struct {
         }
 
         const char_set = try self.extra_data_arena.create(CharSet);
-        char_set.invert = invert;
-        char_set.ranges = try self.extra_data_arena.dupe(CharRange, ranges[0..i+1]);
+        char_set.* = .{
+            .invert = invert,
+            .ranges = try self.extra_data_arena.dupe(CharRange, ranges[0..i + 1]),
+        };
 
         return Node{.char_set = char_set};
     }
@@ -358,7 +360,7 @@ test "parser: basic" {
     const @".*" = ast.nodes[@"a.*".sequence.first_child + 1];
     try testing.expect(@".*" == .repeat);
     try testing.expect(@".*".repeat.min == 0);
-    try testing.expect(@".*".repeat.max == 0);
+    try testing.expect(@".*".repeat.max == .infinite);
 
     const @"." = ast.nodes[@".*".repeat.child];
     try testing.expect(@"." == .any_not_nl);
@@ -366,7 +368,7 @@ test "parser: basic" {
     const @"(d?e)+" = ast.nodes[root.alternation.first_child + 1];
     try testing.expect(@"(d?e)+" == .repeat);
     try testing.expect(@"(d?e)+".repeat.min == 1);
-    try testing.expect(@"(d?e)+".repeat.max == 0);
+    try testing.expect(@"(d?e)+".repeat.max == .infinite);
 
     const @"d?e" = ast.nodes[@"(d?e)+".repeat.child];
     try testing.expect(@"d?e" == .sequence);
@@ -375,7 +377,7 @@ test "parser: basic" {
     const @"d?" = ast.nodes[@"d?e".sequence.first_child];
     try testing.expect(@"d?" == .repeat);
     try testing.expect(@"d?".repeat.min == 0);
-    try testing.expect(@"d?".repeat.max == 1);
+    try testing.expect(@enumToInt(@"d?".repeat.max) == 1);
 
     const @"e" = ast.nodes[@"d?e".sequence.first_child + 1];
     try testing.expect(@"e".char == 'e');
