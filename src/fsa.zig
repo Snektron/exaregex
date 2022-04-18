@@ -26,8 +26,8 @@ pub const FiniteStateAutomaton = struct {
     pub const Transition = struct {
         /// The target state.
         dst: StateRef,
-        /// The symbol that this transition bears.
-        sym: Symbol,
+        /// The symbol that this transition bears, if any.
+        sym: ?Symbol,
     };
 
     /// The states which appear in this state machine. States are referenced to using a `StateRef`,
@@ -36,7 +36,8 @@ pub const FiniteStateAutomaton = struct {
     /// The transitions which appear in this state machine. Transitions are referenced to using a
     /// `TransitionRef`, which is just an index into this array. Transitions are ordered in such a way that
     /// all transitions that originate from a particular state are consecutive in memory. Furthermore,
-    /// subsequences of transitions that belong to a particular state are ordered by symbol.
+    /// subsequences of transitions that belong to a particular state are ordered by symbol. Note that the
+    /// null symbol compares lowest, and so is always ordered first.
     transitions: []Transition,
 
     pub fn deinit(self: *Self, a: Allocator) void {
@@ -65,8 +66,8 @@ pub const FiniteStateAutomaton = struct {
             src: StateRef,
             /// The destination state, an index allocated with `addState`.
             dst: StateRef,
-            /// The symbol that this transition bears.
-            sym: Symbol,
+            /// The symbol that this transition bears, if any.
+            sym: ?Symbol,
         };
 
         /// Allocator used during construction. This allocator is not necessarily the
@@ -100,7 +101,7 @@ pub const FiniteStateAutomaton = struct {
         }
 
         /// Add a new transition to the state machine.
-        pub fn addTransition(self: *Builder, src: StateRef, dst: StateRef, sym: Symbol) !void {
+        pub fn addTransition(self: *Builder, src: StateRef, dst: StateRef, sym: ?Symbol) !void {
             assert(self.isValidStateRef(src));
             assert(self.isValidStateRef(dst));
             try self.transitions.append(self.a, .{.src = src, .dst = dst, .sym = sym});
@@ -117,7 +118,17 @@ pub const FiniteStateAutomaton = struct {
                     if (lhs.src != rhs.src) {
                         return lhs.src < rhs.src;
                     }
-                    return lhs.sym < rhs.sym;
+                    if (lhs.sym) |lhs_sym| {
+                        if (rhs.sym) |rhs_sym| {
+                            return lhs_sym < rhs_sym;
+                        }
+                        // lhs non-null but rhs is, so compares to false.
+                        return false;
+                    } else if (rhs.sym != null) {
+                        return true;
+                    }
+                    // both null, compares to false.
+                    return false;
                 }
             };
             std.sort.sort(Builder.Transition, self.transitions.items, Ctx{}, Ctx.lessThan);
@@ -191,9 +202,9 @@ test "FiniteStateAutomaton.Builder - simple" {
     const c = try builder.addState(true);
     try testing.expect(c == 2);
 
-    try builder.addTransition(b, a, '2');
+    try builder.addTransition(b, a, '1');
     try builder.addTransition(a, b, '0');
-    try builder.addTransition(b, c, '1');
+    try builder.addTransition(b, c, null);
 
     var fsa = try builder.build(testing.allocator);
     defer fsa.deinit(testing.allocator);
@@ -206,8 +217,8 @@ test "FiniteStateAutomaton.Builder - simple" {
 
     const expected_transitions = [_]FiniteStateAutomaton.Transition{
         .{.dst = b, .sym = '0'},
-        .{.dst = c, .sym = '1'},
-        .{.dst = a, .sym = '2'},
+        .{.dst = c, .sym = null},
+        .{.dst = a, .sym = '1'},
     };
     try testing.expectEqualSlices(FiniteStateAutomaton.Transition, &expected_transitions, fsa.transitions);
 }
