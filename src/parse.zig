@@ -3,8 +3,8 @@ const Allocator = std.mem.Allocator;
 const ArenaAllocator = std.heap.ArenaAllocator;
 const testing = std.testing;
 
-const Ast = @import("Ast.zig");
-const Node = Ast.Node;
+const Pattern = @import("Pattern.zig");
+const Node = Pattern.Node;
 const Index = Node.Index;
 const CharSet = @import("CharSet.zig");
 const CharRange = CharSet.Range;
@@ -37,7 +37,7 @@ pub fn parse(a: Allocator, source: []const u8) Allocator.Error!ParseResult {
     deinit_arena = false;
 
     std.debug.assert(parser.offset == source.len);
-    return ParseResult{.ast = .{
+    return ParseResult{.pattern = .{
         .nodes = parser.nodes.toOwnedSlice(a),
         .extra_data_arena = extra_data_arena.state,
     }};
@@ -58,7 +58,7 @@ pub const ParseError = error {
 };
 
 pub const ParseResult = union(enum) {
-    ast: Ast,
+    pattern: Pattern,
     err: Error,
 };
 
@@ -343,43 +343,43 @@ const Parser = struct {
 
 test "parser: basic" {
     const result = try parse(std.testing.allocator, "a.*|(d?e)+");
-    var ast = result.ast;
-    defer ast.deinit(std.testing.allocator);
+    var pattern = result.pattern;
+    defer pattern.deinit(std.testing.allocator);
 
-    const root = ast.nodes[Ast.Root];
+    const root = pattern.nodes[Pattern.Root];
     try testing.expect(root == .alternation);
     try testing.expect(root.alternation.num_children == 2);
 
-    const @"a.*" = ast.nodes[root.alternation.first_child];
+    const @"a.*" = pattern.nodes[root.alternation.first_child];
     try testing.expect(@"a.*" == .sequence);
     try testing.expect(@"a.*".sequence.num_children == 2);
 
-    const @"a" = ast.nodes[@"a.*".sequence.first_child];
+    const @"a" = pattern.nodes[@"a.*".sequence.first_child];
     try testing.expect(@"a".char == 'a');
 
-    const @".*" = ast.nodes[@"a.*".sequence.first_child + 1];
+    const @".*" = pattern.nodes[@"a.*".sequence.first_child + 1];
     try testing.expect(@".*" == .repeat);
     try testing.expect(@".*".repeat.min == 0);
     try testing.expect(@".*".repeat.max == .infinite);
 
-    const @"." = ast.nodes[@".*".repeat.child];
+    const @"." = pattern.nodes[@".*".repeat.child];
     try testing.expect(@"." == .any_not_nl);
 
-    const @"(d?e)+" = ast.nodes[root.alternation.first_child + 1];
+    const @"(d?e)+" = pattern.nodes[root.alternation.first_child + 1];
     try testing.expect(@"(d?e)+" == .repeat);
     try testing.expect(@"(d?e)+".repeat.min == 1);
     try testing.expect(@"(d?e)+".repeat.max == .infinite);
 
-    const @"d?e" = ast.nodes[@"(d?e)+".repeat.child];
+    const @"d?e" = pattern.nodes[@"(d?e)+".repeat.child];
     try testing.expect(@"d?e" == .sequence);
     try testing.expect(@"d?e".sequence.num_children == 2);
 
-    const @"d?" = ast.nodes[@"d?e".sequence.first_child];
+    const @"d?" = pattern.nodes[@"d?e".sequence.first_child];
     try testing.expect(@"d?" == .repeat);
     try testing.expect(@"d?".repeat.min == 0);
     try testing.expect(@enumToInt(@"d?".repeat.max) == 1);
 
-    const @"e" = ast.nodes[@"d?e".sequence.first_child + 1];
+    const @"e" = pattern.nodes[@"d?e".sequence.first_child + 1];
     try testing.expect(@"e".char == 'e');
 }
 
@@ -403,16 +403,16 @@ test "parser: unbalanced closing paren" {
 
 test "parser: empty edge cases" {
     var result = try parse(std.testing.allocator, "|(||)*|");
-    defer result.ast.deinit(std.testing.allocator);
+    defer result.pattern.deinit(std.testing.allocator);
 }
 
 test "parser: escape sequences" {
     const result = try parse(std.testing.allocator, "\\n\\\"\\'\\-\\x123");
-    var ast = result.ast;
-    defer ast.deinit(std.testing.allocator);
+    var pattern = result.pattern;
+    defer pattern.deinit(std.testing.allocator);
 
-    const root = ast.nodes[Ast.Root].sequence;
-    const nodes = ast.nodes[root.first_child .. root.first_child + root.num_children];
+    const root = pattern.nodes[Pattern.Root].sequence;
+    const nodes = pattern.nodes[root.first_child .. root.first_child + root.num_children];
     try testing.expect(nodes.len == 6);
     try testing.expect(nodes[0].char == '\n');
     try testing.expect(nodes[1].char == '"');
@@ -424,10 +424,10 @@ test "parser: escape sequences" {
 
 test "parser: char set basics" {
     const result = try parse(std.testing.allocator, "[^abc-g\\n- x]");
-    var ast = result.ast;
-    defer ast.deinit(std.testing.allocator);
+    var pattern = result.pattern;
+    defer pattern.deinit(std.testing.allocator);
 
-    const set = ast.nodes[Ast.Root].char_set.*;
+    const set = pattern.nodes[Pattern.Root].char_set.*;
     try testing.expect(set.invert);
     try testing.expect(set.ranges.len == 3);
     try testing.expectEqual(CharSet.range('\n', ' '), set.ranges[0]);

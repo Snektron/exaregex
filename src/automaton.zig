@@ -3,6 +3,8 @@ const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 
+pub const thompson = @import("automaton/thompson.zig").thompson;
+
 /// An enum used to configure automaton behavior.
 pub const AutomatonKind = enum {
     /// Automaton which does not allow epsilon and duplicate transitions.
@@ -11,8 +13,8 @@ pub const AutomatonKind = enum {
     non_deterministic,
 };
 
-pub const DFA = FiniteAutomaton(.deterministic);
-pub const NFA = FiniteAutomaton(.non_deterministic);
+pub const Dfa = FiniteAutomaton(.deterministic);
+pub const Nfa = FiniteAutomaton(.non_deterministic);
 
 pub fn FiniteAutomaton(comptime kind: AutomatonKind) type {
     return struct {
@@ -22,6 +24,9 @@ pub fn FiniteAutomaton(comptime kind: AutomatonKind) type {
 
         pub const StateRef = u32;
         pub const TransitionRef = u32;
+
+        /// All automatons should start at state 0, deterministic or non-deterministic.
+        pub const start: StateRef = 0;
 
         pub const Symbol = switch (automaton_kind) {
             .deterministic => u8,
@@ -203,20 +208,24 @@ pub fn FiniteAutomaton(comptime kind: AutomatonKind) type {
     };
 }
 
-test "DFA.Builder - empty" {
-    var builder = DFA.Builder.init(testing.allocator);
+test "" {
+    _ = @import("automaton/thompson.zig");
+}
+
+test "Dfa.Builder: empty" {
+    var builder = Dfa.Builder.init(testing.allocator);
     defer builder.deinit();
 
     var fsa = try builder.build(testing.allocator);
     defer fsa.deinit(testing.allocator);
 
-    try testing.expectEqualSlices(DFA.State, &.{}, fsa.states);
+    try testing.expectEqualSlices(Dfa.State, &.{}, fsa.states);
 
-    try testing.expectEqualSlices(DFA.Transition, &.{}, fsa.transitions);
+    try testing.expectEqualSlices(Dfa.Transition, &.{}, fsa.transitions);
 }
 
-test "NFA.Builder - simple" {
-    var builder = NFA.Builder.init(testing.allocator);
+test "Nfa.Builder: simple" {
+    var builder = Nfa.Builder.init(testing.allocator);
     defer builder.deinit();
 
     const a = try builder.addState(false);
@@ -233,16 +242,16 @@ test "NFA.Builder - simple" {
     var fsa = try builder.build(testing.allocator);
     defer fsa.deinit(testing.allocator);
 
-    try testing.expectEqualSlices(NFA.State, &.{
+    try testing.expectEqualSlices(Nfa.State, &.{
         .{.first_transition = 0, .num_transitions = 1, .accept = false},
         .{.first_transition = 1, .num_transitions = 2, .accept = false},
         .{.first_transition = 0, .num_transitions = 0, .accept = true},
     }, fsa.states);
 
-    const expected_transitions = [_]NFA.Transition{
+    const expected_transitions = [_]Nfa.Transition{
         .{.dst = b, .sym = '0'},
         .{.dst = c, .sym = null},
         .{.dst = a, .sym = '1'},
     };
-    try testing.expectEqualSlices(NFA.Transition, &expected_transitions, fsa.transitions);
+    try testing.expectEqualSlices(Nfa.Transition, &expected_transitions, fsa.transitions);
 }

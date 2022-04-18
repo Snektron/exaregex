@@ -1,4 +1,4 @@
-const Ast = @This();
+const Pattern = @This();
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -38,7 +38,12 @@ pub const Node = union(enum) {
     repeat: Repeat,
 };
 
-pub fn deinit(self: *Ast, a: Allocator) void {
+pub fn deinit(self: *Pattern, a: Allocator) void {
     a.free(self.nodes);
     self.extra_data_arena.promote(a).deinit();
+    self.* = undefined;
+}
+
+pub fn children(self: *Pattern, seq: Node.NodeSeq) []Node {
+    return self.nodes[seq.first_child .. seq.first_child + seq.num_children];
 }
