@@ -14,14 +14,14 @@ pub const Node = union(enum) {
     pub const Index = u32;
 
     pub const Repeat = struct {
-        pub const Max = enum(u16) {
-            infinite = 0,
-            _,
+        pub const Kind = enum {
+            zero_or_more,
+            zero_or_once,
+            once_or_more,
         };
 
         child: Index,
-        min: u16,
-        max: Max,
+        kind: Kind,
     };
 
     pub const NodeSeq = struct {

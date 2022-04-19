@@ -188,26 +188,17 @@ const Parser = struct {
         // TODO: Also parse things like {}. For now, just do *, + and ?.
         const child = try self.atom();
         const c = self.peek() orelse return child;
-        const rep: Node.Repeat = switch (c) {
-            '*' => .{
-                .child = try self.addNode(child),
-                .min = 0,
-                .max = .infinite,
-            },
-            '+' => .{
-                .child = try self.addNode(child),
-                .min = 1,
-                .max = .infinite,
-            },
-            '?' => .{
-                .child = try self.addNode(child),
-                .min = 0,
-                .max = @intToEnum(Node.Repeat.Max, 1),
-            },
+        const kind: Node.Repeat.Kind = switch (c) {
+            '*' => .zero_or_more,
+            '?' => .zero_or_once,
+            '+' => .once_or_more,
             else => return child,
         };
         self.consume();
-        return Node{.repeat = rep};
+        return Node{.repeat = .{
+            .child = try self.addNode(child),
+            .kind = kind
+        }};
     }
 
     fn atom(self: *Parser) !Node {
@@ -359,16 +350,14 @@ test "parser: basic" {
 
     const @".*" = pattern.nodes[@"a.*".sequence.first_child + 1];
     try testing.expect(@".*" == .repeat);
-    try testing.expect(@".*".repeat.min == 0);
-    try testing.expect(@".*".repeat.max == .infinite);
+    try testing.expect(@".*".repeat.kind == .zero_or_more);
 
     const @"." = pattern.nodes[@".*".repeat.child];
     try testing.expect(@"." == .any_not_nl);
 
     const @"(d?e)+" = pattern.nodes[root.alternation.first_child + 1];
     try testing.expect(@"(d?e)+" == .repeat);
-    try testing.expect(@"(d?e)+".repeat.min == 1);
-    try testing.expect(@"(d?e)+".repeat.max == .infinite);
+    try testing.expect(@"(d?e)+".repeat.kind == .once_or_more);
 
     const @"d?e" = pattern.nodes[@"(d?e)+".repeat.child];
     try testing.expect(@"d?e" == .sequence);
@@ -376,8 +365,7 @@ test "parser: basic" {
 
     const @"d?" = pattern.nodes[@"d?e".sequence.first_child];
     try testing.expect(@"d?" == .repeat);
-    try testing.expect(@"d?".repeat.min == 0);
-    try testing.expect(@enumToInt(@"d?".repeat.max) == 1);
+    try testing.expect(@"d?".repeat.kind == .zero_or_once);
 
     const @"e" = pattern.nodes[@"d?e".sequence.first_child + 1];
     try testing.expect(@"e".char == 'e');

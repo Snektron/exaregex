@@ -31,7 +31,33 @@ const Context = struct {
                 }
             },
             .char => |c| try self.b.addTransition(start, end, c),
-            .char_set => unreachable, // TODO
+            .char_set => |cs| {
+                if (cs.invert) {
+                    var bits = std.StaticBitSet(256).initEmpty();
+                    for (cs.ranges) |range| {
+                        var c = range.min;
+                        while (true) : (c += 1) {
+                            bits.set(c);
+                            if (c == range.max)
+                                break;
+                        }
+                    }
+
+                    var it = bits.iterator(.{.kind = .unset});
+                    while (it.next()) |c| {
+                        try self.b.addTransition(start, end, @intCast(u8, c));
+                    }
+                } else {
+                    for (cs.ranges) |range| {
+                        var c = range.min;
+                        while (true) : (c += 1) {
+                            try self.b.addTransition(start, end, c);
+                            if (c == range.max)
+                                break;
+                        }
+                    }
+                }
+            },
             .sequence => |seq| {
                 var prev = start;
                 for (self.pattern.children(seq)) |child| {
@@ -53,18 +79,44 @@ const Context = struct {
                     }
                 }
             },
-            .repeat => unreachable, // TODO
+            .repeat => |rep| {
+                const loop_start = try self.b.addState(false);
+                const loop_end = try self.compile(loop_start, self.pattern.nodes[rep.child]);
+
+                try self.b.addTransition(start, loop_start, null);
+                try self.b.addTransition(loop_end, end, null);
+
+                // For ? and *, add the transition which bypasses the child entirely.
+                switch (rep.kind) {
+                    .zero_or_more, .zero_or_once => try self.b.addTransition(start, end, null),
+                    else => {},
+                }
+
+                // For + and *, add the transition which loops around to the start of the loop.
+                switch (rep.kind) {
+                    .zero_or_more, .once_or_more => try self.b.addTransition(loop_end, loop_start, null),
+                    else => {},
+                }
+            },
         }
 
         return end;
     }
 };
 
+/// Configuration options that may be passed to `thompson`.
+pub const Options = struct {
+    /// Special allocator used for temporary allocations.
+    tmp_allocator: ?Allocator = null,
+};
+
 /// Perform the thompson construction: Given a regular expression, construct an
 /// Nfa that matches the same language.
-pub fn thompson(a: Allocator, pattern: Pattern) !Nfa {
+/// The final NFA is allocated using `a`. Optional `tmp_allocator` may be passed to perform
+/// temporary allocations required during construction, but will default to `a`.
+pub fn thompson(a: Allocator, pattern: Pattern, opts: Options) !Nfa {
     var ctx = Context{
-        .b = Nfa.Builder.init(a),
+        .b = Nfa.Builder.init(opts.tmp_allocator orelse a),
         .pattern = pattern,
     };
     defer ctx.b.deinit();
@@ -74,6 +126,9 @@ pub fn thompson(a: Allocator, pattern: Pattern) !Nfa {
     const end = try ctx.compile(start, pattern.nodes[Pattern.Root]);
     ctx.b.states.items[end].accept = true;
 
-    return try ctx.b.build(a); // TODO: use different allocator?
+    return try ctx.b.build(a);
 }
 
+test "thompson" {
+    _ = thompson;
+}
