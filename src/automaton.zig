@@ -4,6 +4,7 @@ const Allocator = std.mem.Allocator;
 const assert = std.debug.assert;
 
 pub const thompson = @import("automaton/thompson.zig").thompson;
+pub const subset = @import("automaton/subset.zig").subset;
 
 /// An enum used to configure automaton behavior.
 pub const AutomatonKind = enum {
@@ -68,9 +69,9 @@ pub fn FiniteAutomaton(comptime kind: AutomatonKind) type {
             self.* = undefined;
         }
 
-        pub fn transitionsForState(self: Self, state_ref: StateRef) []Transition {
+        pub fn outgoing(self: Self, state_ref: StateRef) []Transition {
             const state = self.states[state_ref];
-            return self.transitions[state.first_transition .. state.first_transition + state.num_transitions];
+            return self.transitions[state.first_transition..][0..state.num_transitions];
         }
 
         /// Utility function used to order two symbols.
@@ -210,6 +211,7 @@ pub fn FiniteAutomaton(comptime kind: AutomatonKind) type {
 
 test "" {
     _ = @import("automaton/thompson.zig");
+    _ = @import("automaton/subset.zig");
 }
 
 test "Dfa.Builder: empty" {

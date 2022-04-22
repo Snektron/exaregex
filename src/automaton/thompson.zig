@@ -1,9 +1,7 @@
 const std = @import("std");
-const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const Pattern = @import("../Pattern.zig");
 const Nfa = @import("../automaton.zig").Nfa;
-const parse = @import("../parse.zig").parse;
 
 const Context = struct {
     b: Nfa.Builder,
