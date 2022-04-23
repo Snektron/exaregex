@@ -9,4 +9,5 @@ test "main" {
     _ = @import("parse.zig");
     _ = @import("CharSet.zig");
     _ = @import("automaton.zig");
+    _ = @import("engine.zig");
 }

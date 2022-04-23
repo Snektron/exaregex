@@ -69,23 +69,53 @@ pub fn FiniteAutomaton(comptime kind: AutomatonKind) type {
             self.* = undefined;
         }
 
+        /// Return the outgoing transitions for a particular state.
         pub fn outgoing(self: Self, state_ref: StateRef) []Transition {
             const state = self.states[state_ref];
             return self.transitions[state.first_transition..][0..state.num_transitions];
         }
 
+        /// Check if the state machine contains a transition starting from `state` labelled
+        /// with symbol `sym`, and if so, returns the target state. If the state machine contains
+        /// multiple such transitions, any of them may be returned.
+        /// TODO: Function that returns all states?
+        pub fn getTransitionTarget(self: Self, state: StateRef, sym: Symbol) ?StateRef {
+            // Since the states are ordered we can just do a simple binary search, though that could
+            // probably be improved by bailing out to a linear search when the size is small enough.
+            const txs = self.outgoing(state);
+            var left: usize = 0;
+            var right: usize = txs.len;
+            while (left < right) {
+                const mid = left + (right - left) / 2;
+                switch (orderSymbols(sym, txs[mid].sym)) {
+                    .eq => return txs[mid].dst,
+                    .gt => left = mid + 1,
+                    .lt => right = mid,
+                }
+            }
+
+            return null;
+        }
+
         /// Utility function used to order two symbols.
-        fn symLessThan(lhs: Symbol, rhs: Symbol) bool {
+        fn orderSymbols(lhs: Symbol, rhs: Symbol) std.math.Order {
             switch (automaton_kind) {
-                .deterministic => return lhs < rhs,
+                .deterministic => return std.math.order(lhs, rhs),
                 .non_deterministic => {
-                    // If rhs is null:
-                    // - if lhs is also null, we compare equal => return false.
-                    // - else, lhs will compare larger => return false.
-                    const rhs_val = rhs orelse return false;
-                    // If lhs is null at this point, it will always compare smaller since rhs is non-null.
-                    const lhs_val = lhs orelse return true;
-                    return lhs_val < rhs_val;
+                    if (lhs) |lhs_val| {
+                        if (rhs) |rhs_val| {
+                            return std.math.order(lhs_val, rhs_val);
+                        } else {
+                            // lhs is not null but rhs is => lhs is larger.
+                            return .gt;
+                        }
+                    } else if (rhs != null) {
+                        // lhs is null but rhs is not => lhs is smaller.
+                        return .lt;
+                    } else {
+                        // Both null.
+                        return .eq;
+                    }
                 },
             }
         }
@@ -157,7 +187,7 @@ pub fn FiniteAutomaton(comptime kind: AutomatonKind) type {
                         if (lhs.src != rhs.src) {
                             return lhs.src < rhs.src;
                         }
-                        return symLessThan(lhs.sym, rhs.sym);
+                        return orderSymbols(lhs.sym, rhs.sym) == .lt;
                     }
                 };
                 std.sort.sort(Builder.Transition, self.transitions.items, Ctx{}, Ctx.lessThan);
