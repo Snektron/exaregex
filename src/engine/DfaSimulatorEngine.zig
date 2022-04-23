@@ -8,7 +8,6 @@ const testing = std.testing;
 const Pattern = @import("../Pattern.zig");
 const automaton = @import("../automaton.zig");
 const Dfa = automaton.Dfa;
-const parsePattern = @import("../parse.zig").parse;
 
 /// Representation of a pattern after compilation.
 pub const CompiledPattern = struct {
@@ -53,19 +52,6 @@ pub fn matches(self: *DfaSimulatorEngine, pattern: CompiledPattern, input: []con
 }
 
 test "DfaSimulatorEngine" {
-    var pattern = switch (try parsePattern(testing.allocator, "a*b")) {
-        .err => unreachable,
-        .pattern => |pattern| pattern,
-    };
-    defer pattern.deinit(testing.allocator);
-
     var engine = DfaSimulatorEngine.init();
-    const compiled = try engine.compilePattern(testing.allocator, pattern);
-    defer engine.destroyCompiledPattern(testing.allocator, compiled);
-
-    try testing.expect(engine.matches(compiled, "b"));
-    try testing.expect(engine.matches(compiled, "aaaab"));
-    try testing.expect(!engine.matches(compiled, "ba"));
-    try testing.expect(!engine.matches(compiled, ""));
-    try testing.expect(!engine.matches(compiled, "c"));
+    try @import("test.zig").testEngine(DfaSimulatorEngine, &engine);
 }
