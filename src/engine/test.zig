@@ -79,13 +79,21 @@ const cases = [_]Case{
         .accept = &.{"123", "0xABC123", "0b1101", "0B11", "0X0"},
         .reject = &.{"_123", "0xX", "0b123", "0o123", "123AB"},
     },
+    .{
+        .pattern = "((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.)((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.)((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\\.)(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)",
+        .accept = &.{"127.0.0.1", "255.26.011.000"},
+        .reject = &.{"abc", "123.123.123.123.123", "256."},
+    },
 };
 
 pub fn testEngine(comptime Engine: type, engine: *Engine) !void {
     var fail = false;
     for (cases) |test_case| {
         var pattern = switch (try parsePattern(testing.allocator, test_case.pattern)) {
-            .err => unreachable,
+            .err => |err| {
+                std.debug.print("Error parsing test regex '{s}': {} at offset {}\n", .{test_case.pattern, err.err, err.offset});
+                unreachable;
+            },
             .pattern => |pattern| pattern,
         };
         defer pattern.deinit(testing.allocator);

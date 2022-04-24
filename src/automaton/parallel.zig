@@ -107,10 +107,10 @@ const MergeTable = struct {
 
         // Fill in the new entries with the reject state.
         i = 0;
-        while (i < new_size) : (i += 1) {
-            std.mem.set(ParallelDfa.StateRef, merges[i * new_capacity + new_size..(i + 1) * new_capacity], .reject);
+        while (i < self.size) : (i += 1) {
+            std.mem.set(ParallelDfa.StateRef, merges[i * new_capacity + self.size..(i + 1) * new_capacity], .reject);
         }
-        std.mem.set(ParallelDfa.StateRef, merges[new_size * new_capacity..], .reject);
+        std.mem.set(ParallelDfa.StateRef, merges[i * new_capacity..], .reject);
 
         self.size = new_size;
         self.capacity = new_capacity;
