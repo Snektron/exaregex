@@ -1,4 +1,4 @@
-/// This engine compiles Patterns to a Parallel DFA, and simulates that to check if the input is valid.
+/// This engine compiles Patterns to a Parallel DFA, and simulates that sequentially to check if the input is valid.
 const ParallelDfaSimulatorEngine = @This();
 
 const std = @import("std");
