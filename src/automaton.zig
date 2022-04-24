@@ -5,6 +5,8 @@ const assert = std.debug.assert;
 
 pub const thompson = @import("automaton/thompson.zig").thompson;
 pub const subset = @import("automaton/subset.zig").subset;
+pub const parallel = @import("automaton/parallel.zig");
+pub const parallelize = parallel.parallelize;
 
 /// An enum used to configure automaton behavior.
 pub const AutomatonKind = enum {
@@ -242,6 +244,7 @@ pub fn FiniteAutomaton(comptime kind: AutomatonKind) type {
 test "" {
     _ = @import("automaton/thompson.zig");
     _ = @import("automaton/subset.zig");
+    _ = @import("automaton/parallel.zig");
 }
 
 test "Dfa.Builder: empty" {

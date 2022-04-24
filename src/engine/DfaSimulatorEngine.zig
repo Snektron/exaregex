@@ -3,7 +3,6 @@ const DfaSimulatorEngine = @This();
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const testing = std.testing;
 
 const Pattern = @import("../Pattern.zig");
 const automaton = @import("../automaton.zig");

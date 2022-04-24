@@ -181,7 +181,6 @@ const StateSet = struct {
 };
 
 const Context = struct {
-    const StateSetRef = usize;
     /// The NFA for which were are generating a DFA.
     nfa: Nfa,
     /// The builder for the DFA we are generating.
