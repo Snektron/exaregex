@@ -28,7 +28,7 @@ pub const ParallelDfa = struct {
 
     pub fn deinit(self: *ParallelDfa, a: Allocator) void {
         const state_count = self.stateCount();
-        a.free(self.merges[0..state_count * state_count]);
+        a.free(self.merges[0 .. state_count * state_count]);
         self.accepting_states.deinit(a);
         self.* = undefined;
     }
@@ -47,11 +47,11 @@ pub const ParallelDfa = struct {
     pub fn merge(self: ParallelDfa, a: StateRef, b: StateRef) StateRef {
         const i = switch (a) {
             .reject => return .reject,
-            else => |x| @enumToInt(x),
+            else => |x| @intFromEnum(x),
         };
         const j = switch (b) {
             .reject => return .reject,
-            else => |x| @enumToInt(x),
+            else => |x| @intFromEnum(x),
         };
 
         assert(i < self.stateCount());
@@ -63,7 +63,7 @@ pub const ParallelDfa = struct {
     pub fn isAccepting(self: ParallelDfa, state: StateRef) bool {
         return switch (state) {
             .reject => false,
-            else => |x| self.accepting_states.isSet(@enumToInt(x)),
+            else => |x| self.accepting_states.isSet(@intFromEnum(x)),
         };
     }
 };
@@ -80,7 +80,7 @@ const MergeTable = struct {
     merges: [*]ParallelDfa.StateRef = undefined,
 
     fn deinit(self: MergeTable, a: Allocator) void {
-        a.free(self.merges[0..self.capacity * self.capacity]);
+        a.free(self.merges[0 .. self.capacity * self.capacity]);
     }
 
     /// Resize (grow) the merge table. New entries are initialized with ParallelDfa.reject.
@@ -92,7 +92,7 @@ const MergeTable = struct {
         }
 
         // Crude computation of a better capacity.
-        var new_capacity = @maximum(min_capacity, self.capacity);
+        var new_capacity = @max(min_capacity, self.capacity);
         while (new_capacity < new_size) {
             new_capacity *= 2;
         }
@@ -102,15 +102,15 @@ const MergeTable = struct {
         var i = @as(usize, self.size);
         while (i > 0) {
             i -= 1;
-            std.mem.copyBackwards(ParallelDfa.StateRef, merges[i * new_capacity..], merges[i * self.capacity..][0..self.size]);
+            std.mem.copyBackwards(ParallelDfa.StateRef, merges[i * new_capacity ..], merges[i * self.capacity ..][0..self.size]);
         }
 
         // Fill in the new entries with the reject state.
         i = 0;
         while (i < self.size) : (i += 1) {
-            std.mem.set(ParallelDfa.StateRef, merges[i * new_capacity + self.size..(i + 1) * new_capacity], .reject);
+            @memset(merges[i * new_capacity + self.size .. (i + 1) * new_capacity], .reject);
         }
-        std.mem.set(ParallelDfa.StateRef, merges[i * new_capacity..], .reject);
+        @memset(merges[i * new_capacity ..], .reject);
 
         self.size = new_size;
         self.capacity = new_capacity;
@@ -123,14 +123,14 @@ const MergeTable = struct {
     }
 
     /// Turn this merge table into a tightly allocated merge table of self.size by self.size elements.
-    fn toOwnedSquarray(self: *MergeTable, a: Allocator) [*]ParallelDfa.StateRef {
+    fn toOwnedSquarray(self: *MergeTable, a: Allocator) ![*]ParallelDfa.StateRef {
         // First pack the items in memory.
         const merges = self.allocatedSlice();
         var i: usize = 0;
         while (i < self.size) : (i += 1) {
-            std.mem.copy(ParallelDfa.StateRef, merges[i * self.size..], merges[i * self.capacity..][0..self.size]);
+            std.mem.copyForwards(ParallelDfa.StateRef, merges[i * self.size ..], merges[i * self.capacity ..][0..self.size]);
         }
-        const slice = a.shrink(merges, @as(usize, self.size) * self.size);
+        const slice = try a.realloc(merges, @as(usize, self.size) * self.size);
         self.size = 0;
         self.capacity = 0;
         self.merges = undefined;
@@ -138,14 +138,14 @@ const MergeTable = struct {
     }
 
     fn allocatedSlice(self: MergeTable) []ParallelDfa.StateRef {
-        return self.merges[0..@as(usize, self.capacity) * self.capacity];
+        return self.merges[0 .. @as(usize, self.capacity) * self.capacity];
     }
 
     /// Set the result state at a combination of states.
     fn set(self: MergeTable, i: ParallelDfa.StateRef, j: ParallelDfa.StateRef, result: ParallelDfa.StateRef) void {
         assert(i != .reject);
         assert(j != .reject);
-        self.merges[@as(usize, @enumToInt(i)) * self.capacity + @enumToInt(j)] = result;
+        self.merges[@as(usize, @intFromEnum(i)) * self.capacity + @intFromEnum(j)] = result;
     }
 };
 
@@ -159,7 +159,7 @@ const ParallelState = struct {
 
         fn init(ref: Dfa.StateRef) Transition {
             assert(ref != 0xFFFF_FFFF); // Too many states in state machine.
-            return @intToEnum(Transition, ref);
+            return @as(Transition, @enumFromInt(ref));
         }
     };
 
@@ -187,15 +187,15 @@ const ParallelState = struct {
 
     /// Compute a 32-bit hash for this parallel state.
     fn hash(self: ParallelState) u32 {
-        return @truncate(u32, Wyhash.hash(0, std.mem.sliceAsBytes(self.transitions)));
+        return @as(u32, @truncate(Wyhash.hash(0, std.mem.sliceAsBytes(self.transitions))));
     }
 
     // Compute the merged state from two source states.
     fn merge(self: *ParallelState, a: ParallelState, b: ParallelState) void {
-        for (self.transitions) |*dst, i| {
+        for (self.transitions, 0..) |*dst, i| {
             dst.* = switch (a.transitions[i]) {
                 .reject => .reject,
-                else => |j| b.transitions[@enumToInt(j)],
+                else => |j| b.transitions[@intFromEnum(j)],
             };
         }
     }
@@ -239,7 +239,7 @@ const ParallelState = struct {
         /// The return value should not be modified.
         fn get(self: Storage, ref: Ref) ParallelState {
             return .{
-                .transitions = self.storage.items[ref * self.states_per_parallel_state..][0..self.states_per_parallel_state],
+                .transitions = self.storage.items[ref * self.states_per_parallel_state ..][0..self.states_per_parallel_state],
             };
         }
 
@@ -257,7 +257,7 @@ const ParallelState = struct {
 
         /// Insert a new parallel state into this storage.
         fn insert(self: *Storage, a: Allocator, state: ParallelState) !InsertResult {
-            const adapter = Adapter{.storage = self};
+            const adapter = Adapter{ .storage = self };
             const result = try self.map.getOrPutAdapted(a, state, adapter);
             if (!result.found_existing) {
                 // If the hash map didn't return a value, it created a new slot at the end, and so the indices
@@ -266,7 +266,7 @@ const ParallelState = struct {
             }
 
             return InsertResult{
-                .ref = @intCast(Ref, result.index),
+                .ref = @as(Ref, @intCast(result.index)),
                 .found_existing = result.found_existing,
             };
         }
@@ -275,7 +275,7 @@ const ParallelState = struct {
             storage: *const Storage,
 
             pub fn eql(self: @This(), a: ParallelState, _: void, b_index: usize) bool {
-                const b = self.storage.get(@intCast(Ref, b_index));
+                const b = self.storage.get(@as(Ref, @intCast(b_index)));
                 return ParallelState.eql(a, b);
             }
 
@@ -299,7 +299,7 @@ const Context = struct {
         const result = try self.parallel_states.insert(a, state);
         // ParallelState.Storage insert and MergeTable insert sequentially, so the
         // result index corresponds with the ParallelDfa state.
-        const result_state = @intToEnum(ParallelDfa.StateRef, result.ref);
+        const result_state = @as(ParallelDfa.StateRef, @enumFromInt(result.ref));
         if (!result.found_existing) {
             assert(self.merge_table.size == result.ref);
             try self.merge_table.addOne(a);
@@ -315,7 +315,7 @@ const Context = struct {
         self.work_state.merge(x, y);
         if (!self.work_state.isAlwaysReject()) { // Don't bother if not required. Merge table is defaulted to reject anyway.
             const result = try self.enqueue(a, self.work_state);
-            self.merge_table.set(@intToEnum(ParallelDfa.StateRef, i), @intToEnum(ParallelDfa.StateRef, j), result);
+            self.merge_table.set(@as(ParallelDfa.StateRef, @enumFromInt(i)), @as(ParallelDfa.StateRef, @enumFromInt(j)), result);
         }
     }
 };
@@ -331,7 +331,7 @@ pub const Options = struct {
 /// Note: Depending on the DFA, this may be a time and memory consuming operation!
 /// Some DFAs explode in the total number of states.
 pub fn parallelize(a: Allocator, dfa: Dfa, opts: Options) !ParallelDfa {
-    const states_per_parallel_state = @intCast(u32, dfa.states.len);
+    const states_per_parallel_state = @as(u32, @intCast(dfa.states.len));
     assert(states_per_parallel_state < 0xFFFF_FFFF); // We use the last value as explicit reject state here.
 
     var work_state = try ParallelState.alloc(a, states_per_parallel_state);
@@ -348,14 +348,14 @@ pub fn parallelize(a: Allocator, dfa: Dfa, opts: Options) !ParallelDfa {
 
     // Insert the initial states, which are guaranteed to map to the symbol with the corresponding index.
     const initial_states = blk: {
-        var initial_state_storage = ParallelState.Storage{.states_per_parallel_state = states_per_parallel_state};
+        var initial_state_storage = ParallelState.Storage{ .states_per_parallel_state = states_per_parallel_state };
         defer initial_state_storage.deinit(a);
         // Allocate space for the 256 initial states.
         try initial_state_storage.storage.resize(a, states_per_parallel_state * 256);
-        std.mem.set(ParallelState.Transition, initial_state_storage.storage.items, .reject);
+        @memset(initial_state_storage.storage.items, .reject);
 
-        for (dfa.states) |_, i| {
-            const src = @intCast(Dfa.StateRef, i);
+        for (0..dfa.states.len) |i| {
+            const src = @as(Dfa.StateRef, @intCast(i));
             for (dfa.outgoing(src)) |tx| {
                 const ps = initial_state_storage.get(tx.sym);
                 ps.transitions[src] = ParallelState.Transition.init(tx.dst);
@@ -400,16 +400,16 @@ pub fn parallelize(a: Allocator, dfa: Dfa, opts: Options) !ParallelDfa {
             const ps = ctx.parallel_states.get(i);
             switch (ps.transitions[Dfa.start]) {
                 .reject => {},
-                else => |final| if (dfa.states[@enumToInt(final)].accept) {
+                else => |final| if (dfa.states[@intFromEnum(final)].accept) {
                     accepting_states.set(i);
-                }
+                },
             }
         }
     }
 
     return ParallelDfa{
         .initial_states = initial_states,
-        .merges = ctx.merge_table.toOwnedSquarray(a),
+        .merges = try ctx.merge_table.toOwnedSquarray(a),
         .accepting_states = accepting_states,
         .empty_is_accepting = dfa.states[Dfa.start].accept,
     };

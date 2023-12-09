@@ -1,0 +1,12 @@
+diff --git a/meson_options.txt b/meson_options.txt
+index 8e0bf2a9555..e195c9ad5ef 100644
+--- a/meson_options.txt
++++ b/meson_options.txt
+@@ -502,7 +502,6 @@ option(
+   value : true,
+   description : 'Enable direct rendering in GLX and EGL for DRI',
+ )
+-
+ option('egl-lib-suffix',
+   type : 'string',
+   value : '',

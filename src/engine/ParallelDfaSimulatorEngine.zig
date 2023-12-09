@@ -54,6 +54,7 @@ pub fn matches(self: *ParallelDfaSimulatorEngine, pattern: CompiledPattern, inpu
         state = pdfa.merge(state, pdfa.initial(sym));
     }
 
+    std.debug.print("final state: {}\n", .{state});
     return pdfa.isAccepting(state);
 }
 

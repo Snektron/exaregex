@@ -35,7 +35,7 @@ const StateSet = struct {
     /// Remove all states from this set.
     fn clear(self: *StateSet) void {
         // Hack because there is no clear function in std bitset.
-        std.mem.set(MaskInt, self.masks(), 0);
+        @memset(self.masks(), 0);
     }
 
     /// Set that a particular state is in this set.
@@ -56,7 +56,7 @@ const StateSet = struct {
 
     /// Compute a 32-bit hash of this state set
     fn hash(self: StateSet) u32 {
-        return @truncate(u32, Wyhash.hash(0, std.mem.sliceAsBytes(self.masks())));
+        return @as(u32, @truncate(Wyhash.hash(0, std.mem.sliceAsBytes(self.masks()))));
     }
 
     /// Return the underlying masks as a slice.
@@ -78,7 +78,7 @@ const StateSet = struct {
     }
 
     fn iterator(self: StateSet) Iterator {
-        return Iterator{.inner = self.bits.iterator(.{})};
+        return Iterator{ .inner = self.bits.iterator(.{}) };
     }
 
     const Iterator = struct {
@@ -86,7 +86,7 @@ const StateSet = struct {
 
         fn next(self: *Iterator) ?Nfa.StateRef {
             return if (self.inner.next()) |state|
-                @intCast(Nfa.StateRef, state)
+                @as(Nfa.StateRef, @intCast(state))
             else
                 null;
         }
@@ -151,7 +151,7 @@ const StateSet = struct {
 
         /// Insert a new state set into this storage.
         fn insert(self: *Storage, a: Allocator, set: StateSet) !InsertResult {
-            const adapter = Adapter{.storage = self};
+            const adapter = Adapter{ .storage = self };
             const result = try self.map.getOrPutAdapted(a, set, adapter);
             if (!result.found_existing) {
                 // If the hash map didn't return a value, it created a new slot at the end, and so the indices
@@ -160,7 +160,7 @@ const StateSet = struct {
             }
 
             return InsertResult{
-                .ref = @intCast(Ref, result.index),
+                .ref = @as(Ref, @intCast(result.index)),
                 .found_existing = result.found_existing,
             };
         }
@@ -169,7 +169,7 @@ const StateSet = struct {
             storage: *const Storage,
 
             pub fn eql(self: @This(), a: StateSet, _: void, b_index: usize) bool {
-                const b = self.storage.get(@intCast(Ref, b_index));
+                const b = self.storage.get(@as(Ref, @intCast(b_index)));
                 return StateSet.eql(a, b);
             }
 
@@ -204,7 +204,7 @@ const Context = struct {
         const result = try self.state_sets.insert(self.allocator(), set);
         // Both Dfa.Builder.addState and StateSet.Storage.insert return indices sequentially,
         // so the result.ref corresponds with the Dfa.StateRef.
-        const state = @intCast(Dfa.StateRef, result.ref);
+        const state = @as(Dfa.StateRef, @intCast(result.ref));
         if (!result.found_existing) {
             assert((try self.b.addState(false)) == state);
         }
@@ -293,10 +293,10 @@ pub fn subset(a: Allocator, nfa: Nfa, opts: Options) !Dfa {
     defer tmp_allocator.free(closure_queue_mem);
 
     var ctx = Context{
-       .nfa = nfa,
-       .b = Dfa.Builder.init(tmp_allocator),
-       .state_sets = StateSet.Storage.init(nfa.states.len),
-       .closure_queue = std.fifo.LinearFifo(Nfa.StateRef, .Slice).init(closure_queue_mem),
+        .nfa = nfa,
+        .b = Dfa.Builder.init(tmp_allocator),
+        .state_sets = StateSet.Storage.init(nfa.states.len),
+        .closure_queue = std.fifo.LinearFifo(Nfa.StateRef, .Slice).init(closure_queue_mem),
     };
     defer ctx.b.deinit();
     defer ctx.state_sets.deinit(tmp_allocator);
@@ -313,12 +313,12 @@ pub fn subset(a: Allocator, nfa: Nfa, opts: Options) !Dfa {
 
     // Process the remaining sets.
     while (ctx.next()) |ref| {
-        const src = @intCast(Dfa.StateRef, ref);
+        const src = @as(Dfa.StateRef, @intCast(ref));
         const follow_set = ctx.follow(ctx.state_sets.get(ref));
 
         var it = follow_set.iterator(.{});
         while (it.next()) |bit| {
-            const sym = @intCast(u8, bit);
+            const sym = @as(u8, @intCast(bit));
             const set = ctx.state_sets.get(ref); // Re-fetch because it was invalidated in the call to enqueue().
             ctx.move(&work_set, set, sym);
             ctx.closure(&work_set);
@@ -328,8 +328,8 @@ pub fn subset(a: Allocator, nfa: Nfa, opts: Options) !Dfa {
     }
 
     // Finally, figure out which states are accepting.
-    for (ctx.b.states.items) |*state, index| {
-        const ref = @intCast(StateSet.Storage.Ref, index);
+    for (ctx.b.states.items, 0..) |*state, index| {
+        const ref = @as(StateSet.Storage.Ref, @intCast(index));
         const set = ctx.state_sets.get(ref);
         if (set.isAnyAccepting(nfa)) {
             state.accept = true;

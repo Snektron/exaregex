@@ -28,22 +28,22 @@ pub fn parse(a: Allocator, source: []const u8) Allocator.Error!ParseResult {
             error.OutOfMemory => return error.OutOfMemory,
             else => |parse_err| parse_err,
         };
-        return ParseResult{.err = .{
+        return ParseResult{ .err = .{
             .offset = parser.offset,
             .err = parse_err,
-        }};
+        } };
     };
 
     deinit_arena = false;
 
     std.debug.assert(parser.offset == source.len);
-    return ParseResult{.pattern = .{
-        .nodes = parser.nodes.toOwnedSlice(a),
+    return ParseResult{ .pattern = .{
+        .nodes = try parser.nodes.toOwnedSlice(a),
         .extra_data_arena = extra_data_arena.state,
-    }};
+    } };
 }
 
-pub const ParseError = error {
+pub const ParseError = error{
     UnbalancedOpenParen,
     UnbalancedClosingParen,
     UnbalancedClosingBracket,
@@ -79,7 +79,7 @@ const Parser = struct {
     extra_data_arena: Allocator,
 
     fn addNode(self: *Parser, node: Node) !Index {
-        const index = @intCast(Index, self.nodes.items.len);
+        const index = @as(Index, @intCast(self.nodes.items.len));
         try self.nodes.append(self.a, node);
         return index;
     }
@@ -144,12 +144,12 @@ const Parser = struct {
             return self.tmp_nodes.items[tmp_offset];
         }
 
-        const first_child = @intCast(Index, self.nodes.items.len);
+        const first_child = @as(Index, @intCast(self.nodes.items.len));
         try self.nodes.appendSlice(self.a, self.tmp_nodes.items[tmp_offset..]);
-        return Node{.alternation = .{
+        return Node{ .alternation = .{
             .first_child = first_child,
-            .num_children = @intCast(u32, num_children),
-        }};
+            .num_children = @as(u32, @intCast(num_children)),
+        } };
     }
 
     fn sequence(self: *Parser) !Node {
@@ -176,12 +176,12 @@ const Parser = struct {
             return self.tmp_nodes.items[tmp_offset];
         }
 
-        const first_child = @intCast(Index, self.nodes.items.len);
+        const first_child = @as(Index, @intCast(self.nodes.items.len));
         try self.nodes.appendSlice(self.a, self.tmp_nodes.items[tmp_offset..]);
-        return Node{.sequence = .{
+        return Node{ .sequence = .{
             .first_child = first_child,
-            .num_children = @intCast(u32, num_children),
-        }};
+            .num_children = @as(u32, @intCast(num_children)),
+        } };
     }
 
     fn repeat(self: *Parser) !Node {
@@ -195,10 +195,7 @@ const Parser = struct {
             else => return child,
         };
         self.consume();
-        return Node{.repeat = .{
-            .child = try self.addNode(child),
-            .kind = kind
-        }};
+        return Node{ .repeat = .{ .child = try self.addNode(child), .kind = kind } };
     }
 
     fn atom(self: *Parser) !Node {
@@ -223,7 +220,7 @@ const Parser = struct {
             },
             ')', '|' => unreachable, // Handled elsewhere
             '*', '+', '?' => return error.StrayRepeat,
-            else => return Node{.char = try self.maybeEscapedChar()},
+            else => return Node{ .char = try self.maybeEscapedChar() },
         }
     }
 
@@ -253,11 +250,11 @@ const Parser = struct {
                 return CharRange.cmp(a, b) == .lt;
             }
         };
-        std.sort.sort(CharRange, self.current_char_range.items, {}, Cmp.cmp);
+        std.sort.block(CharRange, self.current_char_range.items, {}, Cmp.cmp);
 
         const ranges = self.current_char_range.items;
         var i: usize = 0;
-        for (ranges) |r, j| {
+        for (ranges, 0..) |r, j| {
             if (j == 0) {
                 continue;
             }
@@ -273,10 +270,10 @@ const Parser = struct {
         const char_set = try self.extra_data_arena.create(CharSet);
         char_set.* = .{
             .invert = invert,
-            .ranges = try self.extra_data_arena.dupe(CharRange, ranges[0..i + 1]),
+            .ranges = try self.extra_data_arena.dupe(CharRange, ranges[0 .. i + 1]),
         };
 
-        return Node{.char_set = char_set};
+        return Node{ .char_set = char_set };
     }
 
     fn charSetChar(self: *Parser) !u8 {
@@ -345,8 +342,8 @@ test "parser: basic" {
     try testing.expect(@"a.*" == .sequence);
     try testing.expect(@"a.*".sequence.num_children == 2);
 
-    const @"a" = pattern.nodes[@"a.*".sequence.first_child];
-    try testing.expect(@"a".char == 'a');
+    const a = pattern.nodes[@"a.*".sequence.first_child];
+    try testing.expect(a.char == 'a');
 
     const @".*" = pattern.nodes[@"a.*".sequence.first_child + 1];
     try testing.expect(@".*" == .repeat);
@@ -367,8 +364,8 @@ test "parser: basic" {
     try testing.expect(@"d?" == .repeat);
     try testing.expect(@"d?".repeat.kind == .zero_or_once);
 
-    const @"e" = pattern.nodes[@"d?e".sequence.first_child + 1];
-    try testing.expect(@"e".char == 'e');
+    const e = pattern.nodes[@"d?e".sequence.first_child + 1];
+    try testing.expect(e.char == 'e');
 }
 
 test "parser: stray repeat" {

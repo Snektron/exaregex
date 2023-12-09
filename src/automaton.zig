@@ -155,7 +155,7 @@ pub fn FiniteAutomaton(comptime kind: AutomatonKind) type {
             transitions: std.ArrayListUnmanaged(Builder.Transition) = .{},
 
             pub fn init(a: Allocator) Builder {
-                return .{.a = a};
+                return .{ .a = a };
             }
 
             pub fn deinit(self: *Builder) void {
@@ -166,8 +166,8 @@ pub fn FiniteAutomaton(comptime kind: AutomatonKind) type {
 
             /// Add a new state to the state machine.
             pub fn addState(self: *Builder, accept: bool) !StateRef {
-                const ref = @intCast(u32, self.states.items.len);
-                try self.states.append(self.a, .{.accept = accept});
+                const ref = @as(u32, @intCast(self.states.items.len));
+                try self.states.append(self.a, .{ .accept = accept });
                 return ref;
             }
 
@@ -175,7 +175,7 @@ pub fn FiniteAutomaton(comptime kind: AutomatonKind) type {
             pub fn addTransition(self: *Builder, src: StateRef, dst: StateRef, sym: Symbol) !void {
                 assert(self.isValidStateRef(src));
                 assert(self.isValidStateRef(dst));
-                try self.transitions.append(self.a, .{.src = src, .dst = dst, .sym = sym});
+                try self.transitions.append(self.a, .{ .src = src, .dst = dst, .sym = sym });
             }
 
             /// Finalize this state machine and turn it into a proper `FiniteAutomaton`.
@@ -192,7 +192,7 @@ pub fn FiniteAutomaton(comptime kind: AutomatonKind) type {
                         return orderSymbols(lhs.sym, rhs.sym) == .lt;
                     }
                 };
-                std.sort.sort(Builder.Transition, self.transitions.items, Ctx{}, Ctx.lessThan);
+                std.sort.block(Builder.Transition, self.transitions.items, Ctx{}, Ctx.lessThan);
 
                 // The builder has changed now, so be sure to "reset" it when exiting this function,
                 // regardless of whether an erro happened.
@@ -207,7 +207,7 @@ pub fn FiniteAutomaton(comptime kind: AutomatonKind) type {
                 const transitions = try a.alloc(Self.Transition, self.transitions.items.len);
                 errdefer a.free(transitions);
 
-                for (self.states.items) |state, i| {
+                for (self.states.items, 0..) |state, i| {
                     states[i] = .{
                         .first_transition = 0,
                         .num_transitions = 0,
@@ -217,13 +217,13 @@ pub fn FiniteAutomaton(comptime kind: AutomatonKind) type {
 
                 var first_transition: StateRef = 0;
                 var run_len: u32 = 0;
-                for (self.transitions.items) |t, i| {
-                    transitions[i] = .{.dst = t.dst, .sym = t.sym};
+                for (self.transitions.items, 0..) |t, i| {
+                    transitions[i] = .{ .dst = t.dst, .sym = t.sym };
                     run_len += 1;
                     if (i == self.transitions.items.len - 1 or t.src != self.transitions.items[i + 1].src) {
                         states[t.src].first_transition = first_transition;
                         states[t.src].num_transitions = run_len;
-                        first_transition = @intCast(u32, i + 1);
+                        first_transition = @as(u32, @intCast(i + 1));
                         run_len = 0;
                     }
                 }
@@ -241,7 +241,7 @@ pub fn FiniteAutomaton(comptime kind: AutomatonKind) type {
     };
 }
 
-test "" {
+test {
     _ = @import("automaton/thompson.zig");
     _ = @import("automaton/subset.zig");
     _ = @import("automaton/parallel.zig");
@@ -278,15 +278,15 @@ test "Nfa.Builder: simple" {
     defer fsa.deinit(testing.allocator);
 
     try testing.expectEqualSlices(Nfa.State, &.{
-        .{.first_transition = 0, .num_transitions = 1, .accept = false},
-        .{.first_transition = 1, .num_transitions = 2, .accept = false},
-        .{.first_transition = 0, .num_transitions = 0, .accept = true},
+        .{ .first_transition = 0, .num_transitions = 1, .accept = false },
+        .{ .first_transition = 1, .num_transitions = 2, .accept = false },
+        .{ .first_transition = 0, .num_transitions = 0, .accept = true },
     }, fsa.states);
 
     const expected_transitions = [_]Nfa.Transition{
-        .{.dst = b, .sym = '0'},
-        .{.dst = c, .sym = null},
-        .{.dst = a, .sym = '1'},
+        .{ .dst = b, .sym = '0' },
+        .{ .dst = c, .sym = null },
+        .{ .dst = a, .sym = '1' },
     };
     try testing.expectEqualSlices(Nfa.Transition, &expected_transitions, fsa.transitions);
 }

@@ -31,8 +31,8 @@ pub const Range = struct {
             return null;
 
         return Range{
-            .min = @minimum(a.min, b.min),
-            .max = @maximum(a.max, b.max),
+            .min = @min(a.min, b.min),
+            .max = @max(a.max, b.max),
         };
     }
 

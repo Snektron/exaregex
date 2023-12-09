@@ -7,7 +7,7 @@ const Context = struct {
     b: Nfa.Builder,
     pattern: Pattern,
 
-    const Error = error {
+    const Error = error{
         OutOfMemory,
     };
 
@@ -41,9 +41,9 @@ const Context = struct {
                         }
                     }
 
-                    var it = bits.iterator(.{.kind = .unset});
+                    var it = bits.iterator(.{ .kind = .unset });
                     while (it.next()) |c| {
-                        try self.b.addTransition(start, end, @intCast(u8, c));
+                        try self.b.addTransition(start, end, @as(u8, @intCast(c)));
                     }
                 } else {
                     for (cs.ranges) |range| {
