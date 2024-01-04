@@ -17,6 +17,10 @@ pub fn init() DfaSimulatorEngine {
     return .{};
 }
 
+pub fn deinit(self: *DfaSimulatorEngine) void {
+    _ = self;
+}
+
 /// Compile a Pattern into an engine-specific representation.
 pub fn compilePattern(self: *DfaSimulatorEngine, a: Allocator, pattern: Pattern) !CompiledPattern {
     _ = self;
@@ -52,5 +56,7 @@ pub fn matches(self: *DfaSimulatorEngine, pattern: CompiledPattern, input: []con
 
 test "DfaSimulatorEngine" {
     var engine = DfaSimulatorEngine.init();
+    defer engine.deinit();
+
     try @import("test.zig").testEngine(DfaSimulatorEngine, &engine);
 }

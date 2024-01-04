@@ -17,6 +17,10 @@ pub fn init() ParallelDfaSimulatorEngine {
     return .{};
 }
 
+pub fn deinit(self: *ParallelDfaSimulatorEngine) void {
+    _ = self;
+}
+
 /// Compile a Pattern into an engine-specific representation.
 pub fn compilePattern(self: *ParallelDfaSimulatorEngine, a: Allocator, pattern: Pattern) !CompiledPattern {
     _ = self;
@@ -54,11 +58,12 @@ pub fn matches(self: *ParallelDfaSimulatorEngine, pattern: CompiledPattern, inpu
         state = pdfa.merge(state, pdfa.initial(sym));
     }
 
-    std.debug.print("final state: {}\n", .{state});
     return pdfa.isAccepting(state);
 }
 
 test "ParallelDfaSimulatorEngine" {
     var engine = ParallelDfaSimulatorEngine.init();
+    defer engine.deinit();
+
     try @import("test.zig").testEngine(ParallelDfaSimulatorEngine, &engine);
 }
