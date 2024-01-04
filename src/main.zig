@@ -37,7 +37,7 @@ pub fn main() !void {
     std.debug.print("runtime: {}us\n", .{elapsed / std.time.ns_per_us});
 }
 
-test "main" {
+test {
     _ = @import("parse.zig");
     _ = @import("CharSet.zig");
     _ = @import("automaton.zig");

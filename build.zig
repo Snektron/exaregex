@@ -1,6 +1,6 @@
 const std = @import("std");
 
-pub fn build(b: *std.build.Builder) void {
+pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
@@ -10,26 +10,31 @@ pub fn build(b: *std.build.Builder) void {
         .target = target,
         .optimize = optimize,
     });
-    b.installArtifact(exe);
     exe.linkLibC();
-    exe.linkSystemLibraryName("OpenCL");
+    exe.linkSystemLibrary("OpenCL");
 
-    const run_cmd = b.addRunArtifact(exe);
-    run_cmd.step.dependOn(b.getInstallStep());
+    b.installArtifact(exe);
+
+    const run_exe = b.addRunArtifact(exe);
+    run_exe.step.dependOn(b.getInstallStep());
     if (b.args) |args| {
-        run_cmd.addArgs(args);
+        run_exe.addArgs(args);
     }
 
     const run_step = b.step("run", "Run the app");
-    run_step.dependOn(&run_cmd.step);
+    run_step.dependOn(&run_exe.step);
 
-    var exe_tests = b.addTest(.{
+    const tests = b.addTest(.{
         .root_source_file = .{ .path = "src/main.zig" },
+        .target = target,
+        .optimize = optimize,
     });
 
-    exe_tests.linkLibC();
-    exe_tests.linkSystemLibraryName("OpenCL");
+    tests.linkLibC();
+    tests.linkSystemLibrary("OpenCL");
+
+    const run_tests = b.addRunArtifact(tests);
 
     const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&exe_tests.step);
+    test_step.dependOn(&run_tests.step);
 }
