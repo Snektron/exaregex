@@ -55,6 +55,7 @@ pub const ParseError = error{
     UnterminatedCharSet,
     InvalidCharSetChar,
     InvalidCharSetRange,
+    AnchorsNotSupported,
 };
 
 pub const ParseResult = union(enum) {
@@ -220,6 +221,7 @@ const Parser = struct {
             },
             ')', '|' => unreachable, // Handled elsewhere
             '*', '+', '?' => return error.StrayRepeat,
+            '^', '$' => return error.AnchorsNotSupported,
             else => return Node{ .char = try self.maybeEscapedChar() },
         }
     }
