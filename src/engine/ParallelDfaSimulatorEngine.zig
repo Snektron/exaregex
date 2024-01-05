@@ -45,7 +45,7 @@ pub fn destroyCompiledPattern(self: *ParallelDfaSimulatorEngine, a: Allocator, p
 }
 
 /// Check if a (compiled) pattern matches a character sequence.
-pub fn matches(self: *ParallelDfaSimulatorEngine, pattern: CompiledPattern, input: []const u8) bool {
+pub fn matches(self: *ParallelDfaSimulatorEngine, pattern: CompiledPattern, input: []const u8) !bool {
     _ = self;
     const pdfa = pattern.pdfa;
 

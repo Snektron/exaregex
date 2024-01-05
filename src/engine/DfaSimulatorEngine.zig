@@ -42,7 +42,7 @@ pub fn destroyCompiledPattern(self: *DfaSimulatorEngine, a: Allocator, pattern: 
 }
 
 /// Check if a (compiled) pattern matches a character sequence.
-pub fn matches(self: *DfaSimulatorEngine, pattern: CompiledPattern, input: []const u8) bool {
+pub fn matches(self: *DfaSimulatorEngine, pattern: CompiledPattern, input: []const u8) !bool {
     _ = self;
     var state = Dfa.start;
     for (input) |sym| {

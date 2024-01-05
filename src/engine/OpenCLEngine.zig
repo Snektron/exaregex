@@ -14,8 +14,8 @@ const c = @cImport({
 const cl = @import("../opencl.zig");
 
 const kernel_source = @embedFile("match.cl");
-const block_size: usize = 256;
-const items_per_thread: usize = 20;
+const block_size: usize = 512; // Why doesn't 1024 work?
+const items_per_thread: usize = 16; // for global_load_dwordx4
 const items_per_block = block_size * items_per_thread;
 
 /// Configuration options for the OpenCL engine
@@ -38,7 +38,8 @@ platform: c.cl_platform_id,
 device: c.cl_device_id,
 context: c.cl_context,
 queue: c.cl_command_queue,
-kernel: c.cl_kernel,
+initial_kernel: c.cl_kernel,
+reduce_kernel: c.cl_kernel,
 
 pub fn init(a: Allocator, options: Options) !OpenCLEngine {
     const platform, const device = try pickPlatformAndDevice(a, options);
@@ -123,7 +124,7 @@ pub fn init(a: Allocator, options: Options) !OpenCLEngine {
         else => unreachable,
     }
 
-    const kernel = c.clCreateKernel(program, "match", &status);
+    const initial_kernel = c.clCreateKernel(program, "initial", &status);
     switch (status) {
         c.CL_SUCCESS => {},
         c.CL_INVALID_PROGRAM,
@@ -136,18 +137,36 @@ pub fn init(a: Allocator, options: Options) !OpenCLEngine {
         c.CL_OUT_OF_HOST_MEMORY => return error.OutOfMemory,
         else => unreachable,
     }
-    errdefer _ = c.clReleaseKernel(kernel);
+    errdefer _ = c.clReleaseKernel(initial_kernel);
+
+    const reduce_kernel = c.clCreateKernel(program, "reduce", &status);
+    switch (status) {
+        c.CL_SUCCESS => {},
+        c.CL_INVALID_PROGRAM,
+        c.CL_INVALID_PROGRAM_EXECUTABLE,
+        c.CL_INVALID_KERNEL_NAME,
+        c.CL_INVALID_KERNEL_DEFINITION,
+        c.CL_INVALID_VALUE,
+        => unreachable,
+        c.CL_OUT_OF_RESOURCES => return error.OutOfDeviceResources,
+        c.CL_OUT_OF_HOST_MEMORY => return error.OutOfMemory,
+        else => unreachable,
+    }
+    errdefer _ = c.clReleaseKernel(reduce_kernel);
+
     return OpenCLEngine{
         .platform = platform.id,
         .device = device.id,
         .context = context,
         .queue = queue,
-        .kernel = kernel,
+        .initial_kernel = initial_kernel,
+        .reduce_kernel = reduce_kernel,
     };
 }
 
 pub fn deinit(self: *OpenCLEngine) void {
-    _ = c.clReleaseKernel(self.kernel);
+    _ = c.clReleaseKernel(self.initial_kernel);
+    _ = c.clReleaseKernel(self.reduce_kernel);
     _ = c.clReleaseCommandQueue(self.queue);
     _ = c.clReleaseContext(self.context);
     self.* = undefined;
@@ -245,7 +264,12 @@ fn createBuffer(self: OpenCLEngine, flags: c.cl_mem_flags, size: usize, maybe_ho
     );
     switch (status) {
         c.CL_SUCCESS => {},
-        c.CL_INVALID_CONTEXT, c.CL_INVALID_PROPERTY, c.CL_INVALID_VALUE, c.CL_INVALID_BUFFER_SIZE, c.CL_INVALID_HOST_PTR, c.CL_MEM_OBJECT_ALLOCATION_FAILURE => return error.OutOfDeviceMemory,
+        c.CL_INVALID_CONTEXT => unreachable,
+        c.CL_INVALID_PROPERTY => unreachable,
+        c.CL_INVALID_VALUE => unreachable,
+        c.CL_INVALID_BUFFER_SIZE => unreachable,
+        c.CL_INVALID_HOST_PTR => unreachable,
+        c.CL_MEM_OBJECT_ALLOCATION_FAILURE => return error.OutOfDeviceMemory,
         c.CL_OUT_OF_RESOURCES => return error.OutOfDeviceResources,
         c.CL_OUT_OF_HOST_MEMORY => return error.OutOfMemory,
         else => unreachable,
@@ -308,23 +332,23 @@ pub fn destroyCompiledPattern(self: *OpenCLEngine, a: Allocator, pattern: Compil
     _ = c.clReleaseMemObject(pattern.merge_table);
 }
 
-fn setKernelArg(self: *OpenCLEngine, index: c.cl_uint, arg: []const u8) !void {
+fn setKernelArg(self: *OpenCLEngine, kernel: cl.Kernel, index: c.cl_uint, arg: []const u8) !void {
+    _ = self;
     const status = c.clSetKernelArg(
-        self.kernel,
+        kernel,
         index,
         arg.len,
         arg.ptr,
     );
     switch (status) {
         c.CL_SUCCESS => {},
-        c.CL_INVALID_ARG_INDEX,
-        c.CL_INVALID_ARG_VALUE,
-        c.CL_INVALID_MEM_OBJECT,
-        c.CL_INVALID_SAMPLER,
-        c.CL_INVALID_DEVICE_QUEUE,
-        c.CL_INVALID_ARG_SIZE,
-        c.CL_MAX_SIZE_RESTRICTION_EXCEEDED,
-        => unreachable,
+        c.CL_INVALID_ARG_INDEX => unreachable,
+        c.CL_INVALID_ARG_VALUE => unreachable,
+        c.CL_INVALID_MEM_OBJECT => unreachable,
+        c.CL_INVALID_SAMPLER => unreachable,
+        c.CL_INVALID_DEVICE_QUEUE => unreachable,
+        c.CL_INVALID_ARG_SIZE => unreachable,
+        c.CL_MAX_SIZE_RESTRICTION_EXCEEDED => unreachable,
         c.CL_OUT_OF_RESOURCES => return error.OutOfDeviceResources,
         c.CL_OUT_OF_HOST_MEMORY => return error.OutOfMemory,
         else => unreachable,
@@ -337,25 +361,28 @@ fn alignForward(size: usize, alignment: usize) usize {
 
 pub fn matches(self: *OpenCLEngine, pattern: CompiledPattern, input: []const u8) !bool {
     const global_work_size = alignForward(input.len, items_per_block) / items_per_thread;
-    const reduce_exchange_size = std.math.divCeil(usize, input.len, items_per_block) catch unreachable;
+    const output_size = std.math.divCeil(usize, input.len, items_per_block) catch unreachable;
 
     std.log.debug("global work size: {} items", .{global_work_size});
 
-    const cl_input = try self.createBuffer(c.CL_MEM_READ_ONLY, input.len, input.ptr);
+    var cl_input = try self.createBuffer(c.CL_MEM_READ_ONLY, input.len, input.ptr);
     defer _ = c.clReleaseMemObject(cl_input);
 
-    const cl_reduce_exchange = try self.createBuffer(c.CL_MEM_READ_WRITE, reduce_exchange_size, null);
-    defer _ = c.clReleaseMemObject(cl_reduce_exchange);
+    // TODO: This size can be smaller
+    var cl_output = try self.createBuffer(c.CL_MEM_READ_WRITE, output_size, null);
+    defer _ = c.clReleaseMemObject(cl_output);
 
-    try self.setKernelArg(0, std.mem.asBytes(&pattern.initial));
-    try self.setKernelArg(1, std.mem.asBytes(&pattern.merge_table));
-    try self.setKernelArg(2, std.mem.asBytes(&@as(c.cl_int, @intCast(pattern.pdfa.stateCount()))));
-    try self.setKernelArg(3, std.mem.asBytes(&cl_input));
-    try self.setKernelArg(4, std.mem.asBytes(&@as(c.cl_int, @intCast(input.len))));
-    try self.setKernelArg(5, std.mem.asBytes(&cl_reduce_exchange));
+    // Launch the initial kernel
+
+    try self.setKernelArg(self.initial_kernel, 0, std.mem.asBytes(&pattern.initial));
+    try self.setKernelArg(self.initial_kernel, 1, std.mem.asBytes(&pattern.merge_table));
+    try self.setKernelArg(self.initial_kernel, 2, std.mem.asBytes(&@as(c.cl_int, @intCast(pattern.pdfa.stateCount()))));
+    try self.setKernelArg(self.initial_kernel, 3, std.mem.asBytes(&cl_input));
+    try self.setKernelArg(self.initial_kernel, 4, std.mem.asBytes(&@as(c.cl_int, @intCast(input.len))));
+    try self.setKernelArg(self.initial_kernel, 5, std.mem.asBytes(&cl_output));
 
     var kernel_completed_event: c.cl_event = undefined;
-    var status = c.clEnqueueNDRangeKernel(self.queue, self.kernel, 1, null, &global_work_size, &block_size, 0, null, &kernel_completed_event);
+    var status = c.clEnqueueNDRangeKernel(self.queue, self.initial_kernel, 1, null, &global_work_size, &block_size, 0, null, &kernel_completed_event);
     switch (status) {
         c.CL_SUCCESS => {},
         c.CL_INVALID_PROGRAM_EXECUTABLE,
@@ -380,11 +407,70 @@ pub fn matches(self: *OpenCLEngine, pattern: CompiledPattern, input: []const u8)
         else => unreachable,
     }
 
+    var size = output_size;
+
+    const first_kernel_completed_event = kernel_completed_event;
+    var prev_kernel_completed = kernel_completed_event;
+
+    while (size > 1) {
+        const out_size = std.math.divCeil(usize, size, items_per_block) catch unreachable;
+        std.log.debug("reducing: {} -> {}", .{size, out_size});
+
+        const tmp = cl_input;
+        cl_input = cl_output;
+        cl_output = tmp;
+
+        try self.setKernelArg(self.reduce_kernel, 0, std.mem.asBytes(&pattern.merge_table));
+        try self.setKernelArg(self.reduce_kernel, 1, std.mem.asBytes(&@as(c.cl_int, @intCast(pattern.pdfa.stateCount()))));
+        try self.setKernelArg(self.reduce_kernel, 2, std.mem.asBytes(&cl_input));
+        try self.setKernelArg(self.reduce_kernel, 3, std.mem.asBytes(&@as(c.cl_int, @intCast(size))));
+        try self.setKernelArg(self.reduce_kernel, 4, std.mem.asBytes(&cl_output));
+
+        const new_global_work_size = alignForward(size, items_per_block) / items_per_thread;
+
+        status = c.clEnqueueNDRangeKernel(
+            self.queue,
+            self.reduce_kernel,
+            1,
+            null,
+            &new_global_work_size,
+            &block_size,
+            1,
+            &prev_kernel_completed,
+            &kernel_completed_event,
+        );
+        switch (status) {
+            c.CL_SUCCESS => {},
+            c.CL_INVALID_PROGRAM_EXECUTABLE => unreachable,
+            c.CL_INVALID_COMMAND_QUEUE => unreachable,
+            c.CL_INVALID_KERNEL => unreachable,
+            c.CL_INVALID_CONTEXT => unreachable,
+            c.CL_INVALID_KERNEL_ARGS => unreachable,
+            c.CL_INVALID_WORK_DIMENSION => unreachable,
+            c.CL_INVALID_GLOBAL_WORK_SIZE => unreachable,
+            c.CL_INVALID_GLOBAL_OFFSET => unreachable,
+            c.CL_INVALID_WORK_GROUP_SIZE => unreachable,
+            c.CL_INVALID_WORK_ITEM_SIZE => unreachable,
+            c.CL_MISALIGNED_SUB_BUFFER_OFFSET => unreachable,
+            c.CL_INVALID_IMAGE_SIZE => unreachable,
+            c.CL_IMAGE_FORMAT_NOT_SUPPORTED => unreachable,
+            c.CL_INVALID_EVENT_WAIT_LIST => unreachable,
+            c.CL_INVALID_OPERATION => unreachable,
+            c.CL_MEM_OBJECT_ALLOCATION_FAILURE => return error.OutOfDeviceMemory,
+            c.CL_OUT_OF_RESOURCES => return error.OutOfDeviceResources,
+            c.CL_OUT_OF_HOST_MEMORY => return error.OutOfMemory,
+            else => unreachable,
+        }
+        prev_kernel_completed = kernel_completed_event;
+
+        size = out_size;
+    }
+
     var read_completed_event: c.cl_event = undefined;
     var result: u8 = undefined;
     status = c.clEnqueueReadBuffer(
         self.queue,
-        cl_reduce_exchange,
+        cl_output,
         c.CL_FALSE,
         0,
         1,
@@ -424,39 +510,26 @@ pub fn matches(self: *OpenCLEngine, pattern: CompiledPattern, input: []const u8)
 
     var start: c.cl_ulong = undefined;
     var stop: c.cl_ulong = undefined;
-    _ = c.clGetEventProfilingInfo(kernel_completed_event, c.CL_PROFILING_COMMAND_START, @sizeOf(c.cl_ulong), &start, null);
+    _ = c.clGetEventProfilingInfo(first_kernel_completed_event, c.CL_PROFILING_COMMAND_START, @sizeOf(c.cl_ulong), &start, null);
     _ = c.clGetEventProfilingInfo(kernel_completed_event, c.CL_PROFILING_COMMAND_END, @sizeOf(c.cl_ulong), &stop, null);
-    std.debug.print("kernel runtime: {}us\n", .{(stop - start) / std.time.ns_per_us});
-    std.debug.print("kernel throughput: {d:.2} GB/s\n", .{
+    std.log.debug("kernel runtime: {}us", .{(stop - start) / std.time.ns_per_us});
+    std.log.debug("kernel throughput: {d:.2} GB/s", .{
         @as(f32, @floatFromInt(input.len)) / (@as(f32, @floatFromInt(stop - start)) / std.time.ns_per_s) / 1000_000_000
     });
 
-    // std.debug.print("{}\n", .{result});
-    // std.debug.print("{}\n", .{pattern.pdfa.initial_states[input[3]]});
     const result_state = switch (result) {
         255 => .reject,
         else => @as(ParallelDfa.StateRef, @enumFromInt(result)),
     };
-    // {
-    //     const pdfa = pattern.pdfa;
-    //     var i: usize = 0;
-    //     const ws = 4;
-    //     while (i < input.len) : (i += ws) {
-    //         var x = pdfa.initial(input[i]);
-    //         var j: usize = 1;
-    //         while (j < ws) : (j += 1) {
-    //             x = pdfa.merge(x, pdfa.initial(input[i + j]));
-    //         }
-    //         std.debug.print("[{:0>2}] = {}\n", .{i / ws, x});
-    //     }
-    //     // var state = pdfa.initial(input[0]);
-    //     // for (input[1..]) |sym| {
-    //         // state = pdfa.merge(state, pdfa.initial(sym));
-    //     // }
-    // }
     return pattern.pdfa.isAccepting(result_state);
 }
 
 test "OpenCLEngine" {
-    _ = OpenCLEngine;
+    var engine = try OpenCLEngine.init(std.testing.allocator, .{
+        .platform = std.os.getenv("EXAREGEX_PLATFORM"),
+        .device = std.os.getenv("EXAREGEX_DEVICE"),
+    });
+    defer engine.deinit();
+
+    try @import("test.zig").testEngine(OpenCLEngine, &engine);
 }
