@@ -32,17 +32,19 @@ pub fn main() !void {
     const cp = try engine.compilePattern(allocator, pattern);
     defer engine.destroyCompiledPattern(allocator, cp);
 
+    var timer = try std.time.Timer.start();
     const input = try allocator.alloc(u8, 1024 * 1024 * 1024);
     defer allocator.free(input);
     for (input, 0..) |*x, i| {
-        x.* = @as(u8, @intCast(i % 8 + '0'));
+        x.* = @intCast(i % 8 + '0');
     }
+    const generation = timer.lap();
+    std.debug.print("input generation: {}us\n", .{generation / std.time.ns_per_us});
 
-    var timer = try std.time.Timer.start();
     const result = try engine.matches(cp, input);
-    const elapsed = timer.lap();
+    const kernel = timer.lap();
     std.debug.print("match: {}\n", .{result});
-    std.debug.print("runtime: {}us\n", .{elapsed / std.time.ns_per_us});
+    std.debug.print("runtime: {}us\n", .{kernel / std.time.ns_per_us});
 }
 
 test {

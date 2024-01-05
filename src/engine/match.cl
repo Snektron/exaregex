@@ -161,7 +161,6 @@ kernel void initial(
             valid_items_in_block
         );
     } else {
-        // TODO: block transposed load?
         unsigned char in[ITEMS_PER_THREAD];
         for (int i = 0; i < ITEMS_PER_THREAD; ++i) {
             in[i] = input[global_id * ITEMS_PER_THREAD + i];
@@ -263,7 +262,6 @@ kernel void reduce(
             valid_items_in_block
         );
     } else {
-        // TODO: block transposed load?
         stateref_t states[ITEMS_PER_THREAD];
         for (int i = 0; i < ITEMS_PER_THREAD; ++i) {
             states[i] = input[global_id * ITEMS_PER_THREAD + i];
