@@ -11,10 +11,22 @@ const c = @cImport({
     @cInclude("CL/opencl.h");
 });
 
+const cl = @import("../opencl.zig");
+
 const kernel_source = @embedFile("match.cl");
 const block_size: usize = 256;
 const items_per_thread: usize = 20;
 const items_per_block = block_size * items_per_thread;
+
+/// Configuration options for the OpenCL engine
+pub const Options = struct {
+    /// Substring that the platform name must match.
+    /// By default, selects the first platform.
+    platform: ?[]const u8 = null,
+    /// Substring that the device name must match.
+    /// By default, selects the first device.
+    device: ?[]const u8 = null,
+};
 
 pub const CompiledPattern = struct {
     pdfa: ParallelDfa,
@@ -28,47 +40,24 @@ context: c.cl_context,
 queue: c.cl_command_queue,
 kernel: c.cl_kernel,
 
-pub fn init(a: Allocator) !OpenCLEngine {
-    // TODO: Improve platform/device selection.
-    const platform = blk: {
-        var platform: [2]c.cl_platform_id = undefined;
-        var num_platforms: c.cl_uint = undefined;
-        switch (c.clGetPlatformIDs(2, &platform, &num_platforms)) {
-            c.CL_SUCCESS => {},
-            c.CL_INVALID_VALUE => unreachable,
-            c.CL_OUT_OF_HOST_MEMORY => return error.OutOfMemory,
-            else => unreachable,
-        }
-        if (num_platforms == 0) {
-            return error.NoPlatform;
-        }
+pub fn init(a: Allocator, options: Options) !OpenCLEngine {
+    const platform, const device = try pickPlatformAndDevice(a, options);
 
-        break :blk platform[1];
-    };
+    {
+        const name = try platform.getName(a);
+        defer a.free(name);
+        std.log.debug("platform: {s}", .{name});
+    }
 
-    var name_size: usize = undefined;
-    _ = c.clGetPlatformInfo(platform, c.CL_PLATFORM_NAME, 0, null, &name_size);
-    const name = try a.alloc(u8, name_size);
-    defer a.free(name);
-    _ = c.clGetPlatformInfo(platform, c.CL_PLATFORM_NAME, name_size, name.ptr, null);
-    std.log.debug("platform: {s}", .{name});
-
-    var device: c.cl_device_id = undefined;
-    switch (c.clGetDeviceIDs(platform, c.CL_DEVICE_TYPE_GPU, 1, &device, null)) {
-        c.CL_SUCCESS => {},
-        c.CL_INVALID_PLATFORM,
-        c.CL_INVALID_DEVICE_TYPE,
-        c.CL_INVALID_VALUE,
-        => unreachable,
-        c.CL_DEVICE_NOT_FOUND => return error.NoDevice,
-        c.CL_OUT_OF_RESOURCES => return error.OutOfDeviceResources,
-        c.CL_OUT_OF_HOST_MEMORY => return error.OutOfMemory,
-        else => unreachable,
+    {
+        const name = try device.getName(a);
+        defer a.free(name);
+        std.log.debug("device: {s}", .{name});
     }
 
     var status: c.cl_int = undefined;
-    const properties = [_]c.cl_context_properties{ c.CL_CONTEXT_PLATFORM, @as(c.cl_context_properties, @bitCast(@intFromPtr(platform))), 0 };
-    const context = c.clCreateContext(&properties, 1, &device, null, null, &status);
+    const properties = [_]c.cl_context_properties{ c.CL_CONTEXT_PLATFORM, @as(c.cl_context_properties, @bitCast(@intFromPtr(platform.id))), 0 };
+    const context = c.clCreateContext(&properties, 1, &device.id, null, null, &status);
     switch (status) {
         c.CL_SUCCESS => {},
         c.CL_INVALID_PLATFORM,
@@ -83,7 +72,7 @@ pub fn init(a: Allocator) !OpenCLEngine {
     }
     errdefer _ = c.clReleaseContext(context);
 
-    const queue = c.clCreateCommandQueue(context, device, c.CL_QUEUE_PROFILING_ENABLE, &status);
+    const queue = c.clCreateCommandQueue(context, device.id, c.CL_QUEUE_PROFILING_ENABLE, &status);
     switch (status) {
         c.CL_SUCCESS => {},
         c.CL_INVALID_CONTEXT,
@@ -113,7 +102,7 @@ pub fn init(a: Allocator) !OpenCLEngine {
     status = c.clBuildProgram(
         program,
         1,
-        &device,
+        &device.id,
         std.fmt.comptimePrint("-D BLOCK_SIZE={} -D ITEMS_PER_THREAD={}", .{ block_size, items_per_thread }),
         null,
         null,
@@ -128,7 +117,7 @@ pub fn init(a: Allocator) !OpenCLEngine {
         c.CL_INVALID_OPERATION,
         => unreachable,
         c.CL_COMPILER_NOT_AVAILABLE => return error.CompilerNotAvailable,
-        c.CL_BUILD_PROGRAM_FAILURE => unreachable,
+        c.CL_BUILD_PROGRAM_FAILURE => unreachable, // TODO: Get error log?
         c.CL_OUT_OF_RESOURCES => return error.OutOfDeviceResources,
         c.CL_OUT_OF_HOST_MEMORY => return error.OutOfMemory,
         else => unreachable,
@@ -149,18 +138,100 @@ pub fn init(a: Allocator) !OpenCLEngine {
     }
     errdefer _ = c.clReleaseKernel(kernel);
     return OpenCLEngine{
-        .platform = platform,
-        .device = device,
+        .platform = platform.id,
+        .device = device.id,
         .context = context,
         .queue = queue,
         .kernel = kernel,
     };
 }
 
-pub fn deinit(self: OpenCLEngine) void {
+pub fn deinit(self: *OpenCLEngine) void {
     _ = c.clReleaseKernel(self.kernel);
     _ = c.clReleaseCommandQueue(self.queue);
     _ = c.clReleaseContext(self.context);
+    self.* = undefined;
+}
+
+fn pickPlatformAndDevice(
+    a: Allocator,
+    options: Options,
+) !struct{cl.Platform, cl.Device} {
+    const platforms = try cl.getPlatforms(a);
+    defer a.free(platforms);
+
+    if (platforms.len == 0) {
+        return error.NoPlatform;
+    }
+
+    var chosen_platform: cl.Platform = undefined;
+    var chosen_device: cl.Device = undefined;
+
+    if (options.platform) |platform_query| {
+        for (platforms) |platform| {
+            const name = try platform.getName(a);
+            defer a.free(name);
+
+            if (std.mem.indexOf(u8, name, platform_query) != null) {
+                chosen_platform = platform;
+                break;
+            }
+        } else {
+            return error.NoPlatform;
+        }
+
+        chosen_device = try pickDevice(a, chosen_platform, options.device);
+    } else if (options.device) |device_query| {
+        // Loop through all platforms to find one which matches the device
+        for (platforms) |platform| {
+            chosen_device = pickDevice(a, platform, device_query) catch |err| switch (err) {
+                error.NoDevice => continue,
+                else => return err,
+            };
+
+            chosen_platform = platform;
+            break;
+        } else {
+            return error.NoDevice;
+        }
+    } else {
+        for (platforms) |platform| {
+            chosen_device = pickDevice(a, platform, null) catch |err| switch (err) {
+                error.NoDevice => continue,
+                else => return err,
+            };
+            chosen_platform = platform;
+            break;
+        } else {
+            return error.NoDevice;
+        }
+    }
+
+    return .{ chosen_platform, chosen_device };
+}
+
+fn pickDevice(a: Allocator, platform: cl.Platform, query: ?[]const u8) !cl.Device {
+    const devices = try platform.getDevices(a, .{.gpu = true});
+    defer a.free(devices);
+
+    if (devices.len == 0) {
+        return error.NoDevice;
+    }
+
+    if (query) |device_query| {
+        for (devices) |device| {
+            const device_name = try device.getName(a);
+            defer a.free(device_name);
+
+            if (std.mem.indexOf(u8, device_name, device_query) != null) {
+                return device;
+            }
+        }
+
+        return error.NoDevice;
+    } else {
+        return devices[0];
+    }
 }
 
 fn createBuffer(self: OpenCLEngine, flags: c.cl_mem_flags, size: usize, maybe_host_ptr: ?[*]const u8) !c.cl_mem {
@@ -356,6 +427,9 @@ pub fn matches(self: *OpenCLEngine, pattern: CompiledPattern, input: []const u8)
     _ = c.clGetEventProfilingInfo(kernel_completed_event, c.CL_PROFILING_COMMAND_START, @sizeOf(c.cl_ulong), &start, null);
     _ = c.clGetEventProfilingInfo(kernel_completed_event, c.CL_PROFILING_COMMAND_END, @sizeOf(c.cl_ulong), &stop, null);
     std.debug.print("kernel runtime: {}us\n", .{(stop - start) / std.time.ns_per_us});
+    std.debug.print("kernel throughput: {d:.2} GB/s\n", .{
+        @as(f32, @floatFromInt(input.len)) / (@as(f32, @floatFromInt(stop - start)) / std.time.ns_per_s) / 1000_000_000
+    });
 
     // std.debug.print("{}\n", .{result});
     // std.debug.print("{}\n", .{pattern.pdfa.initial_states[input[3]]});
