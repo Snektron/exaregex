@@ -14,7 +14,7 @@ const c = @cImport({
 const cl = @import("../opencl.zig");
 
 const kernel_source = @embedFile("match.cl");
-const block_size: usize = 512; // Why doesn't 1024 work?
+const block_size: usize = 768; // Why doesn't 1024 work?
 const items_per_thread: usize = 16; // for global_load_dwordx4
 const items_per_block = block_size * items_per_thread;
 
@@ -212,6 +212,8 @@ pub fn compilePattern(self: *OpenCLEngine, a: Allocator, pattern: Pattern) !Comp
             } else @as(u8, @intCast(@intFromEnum(state))),
         };
     }
+    std.log.debug("parallel states: {}", .{ size });
+    std.log.debug("merge table size: {}", .{ merge_table.len });
     const cl_merge_table = try cl.Buffer(u8).createWithData(self.context, .{.read_only = true}, merge_table);
     errdefer cl_merge_table.release();
 
@@ -230,21 +232,23 @@ pub fn destroyCompiledPattern(self: *OpenCLEngine, a: Allocator, pattern: Compil
     pattern.merge_table.release();
 }
 
-fn alignForward(size: usize, alignment: usize) usize {
-    return alignment * (std.math.divCeil(usize, size, alignment) catch unreachable);
-}
-
 pub fn matches(self: *OpenCLEngine, pattern: CompiledPattern, input: []const u8) !bool {
-    const global_work_size = alignForward(input.len, items_per_block) / items_per_thread;
-    const output_size = std.math.divCeil(usize, input.len, items_per_block) catch unreachable;
+    const compute_units = try self.device.getInfo(.max_compute_units);
+    const blocks: u32 = @intCast(std.math.divCeil(usize, input.len, items_per_block) catch unreachable);
 
-    std.log.debug("global work size: {} items", .{global_work_size});
+    const output_size = blocks;
+
+    std.log.debug("compute units: {}", .{compute_units});
+    std.log.debug("work size: {}", .{blocks});
 
     var cl_input = try cl.Buffer(u8).createWithData(self.context, .{.read_write = true}, input);
     defer cl_input.release();
 
     var cl_output = try cl.Buffer(u8).create(self.context, .{.read_write = true}, output_size);
     defer cl_output.release();
+
+    var cl_counter = try cl.Buffer(u32).createWithData(self.context, .{.read_write = true}, &.{blocks});
+    defer cl_counter.release();
 
     // Launch the initial kernel
     try self.initial_kernel.setArg(cl.Buffer(u8), 0, &pattern.initial);
@@ -253,20 +257,23 @@ pub fn matches(self: *OpenCLEngine, pattern: CompiledPattern, input: []const u8)
     try self.initial_kernel.setArg(cl.Buffer(u8), 3, &cl_input);
     try self.initial_kernel.setArg(cl.uint, 4, &@intCast(input.len));
     try self.initial_kernel.setArg(cl.Buffer(u8), 5, &cl_output);
+    try self.initial_kernel.setArg(cl.Buffer(u32), 6, &cl_counter);
 
     var kernel_completed = try self.queue.enqueueNDRangeKernel(
         self.initial_kernel,
         null,
-        &.{global_work_size},
+        &.{compute_units * block_size},
         &.{block_size},
         &.{},
     );
 
     const first_kernel_completed = kernel_completed;
 
-    var size = output_size;
+    var size: usize = output_size;
     while (size > 1) {
         const out_size = std.math.divCeil(usize, size, items_per_block) catch unreachable;
+        const out_blocks = std.math.divCeil(usize, size, items_per_block) catch unreachable;
+        const new_global_work_size = out_blocks * block_size;
         std.log.debug("reducing: {} -> {}", .{size, out_size});
 
         const tmp = cl_input;
@@ -278,8 +285,6 @@ pub fn matches(self: *OpenCLEngine, pattern: CompiledPattern, input: []const u8)
         try self.reduce_kernel.setArg(cl.Buffer(u8), 2, &cl_input);
         try self.reduce_kernel.setArg(cl.uint, 3, &@intCast(size));
         try self.reduce_kernel.setArg(cl.Buffer(u8), 4, &cl_output);
-
-        const new_global_work_size = alignForward(size, items_per_block) / items_per_thread;
 
         kernel_completed = try self.queue.enqueueNDRangeKernel(
             self.reduce_kernel,
@@ -307,6 +312,7 @@ pub fn matches(self: *OpenCLEngine, pattern: CompiledPattern, input: []const u8)
     const start = try first_kernel_completed.commandStartTime();
     const stop = try kernel_completed.commandEndTime();
 
+    std.log.debug("result: {}", .{result});
     std.log.debug("kernel runtime: {}us", .{(stop - start) / std.time.ns_per_us});
     std.log.debug("kernel throughput: {d:.2} GB/s", .{
         @as(f32, @floatFromInt(input.len)) / (@as(f32, @floatFromInt(stop - start)) / std.time.ns_per_s) / 1000_000_000

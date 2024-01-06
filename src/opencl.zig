@@ -113,6 +113,18 @@ pub const Platform = extern struct {
 };
 
 pub const Device = extern struct {
+    pub const Info = enum(uint) {
+        @"type" = c.CL_DEVICE_TYPE,
+        max_compute_units = c.CL_DEVICE_MAX_COMPUTE_UNITS,
+
+        pub fn Type(comptime info: Info) type {
+            return switch (info) {
+                .@"type" => DeviceType,
+                .max_compute_units => uint,
+            };
+        }
+    };
+
     id: c.cl_device_id,
 
     pub fn getName(device: Device, a: Allocator) ![]const u8 {
@@ -138,6 +150,18 @@ pub const Device = extern struct {
             else => unreachable, // Undocumented error
         }
         return name;
+    }
+
+    pub fn getInfo(device: Device, comptime info: Info) !info.Type() {
+        var data: info.Type() = undefined;
+        return switch (c.clGetDeviceInfo(device.id, @intFromEnum(info), @sizeOf(info.Type()), &data, null)) {
+            c.CL_SUCCESS => data,
+            c.CL_INVALID_DEVICE => unreachable,
+            c.CL_INVALID_VALUE => unreachable,
+            c.CL_OUT_OF_RESOURCES => error.OutOfDeviceResources,
+            c.CL_OUT_OF_HOST_MEMORY => error.OutOfMemory,
+            else => unreachable, // Undocumented error
+        };
     }
 };
 
