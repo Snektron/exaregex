@@ -65,10 +65,18 @@ pub fn init(a: Allocator, options: Options) !OpenCLEngine {
     const program = try cl.Program.createWithSource(context, kernel_source);
     defer program.release();
 
-    try program.build(
+    program.build(
         &.{device},
-        std.fmt.comptimePrint("-D BLOCK_SIZE={} -D ITEMS_PER_THREAD={}", .{ block_size, items_per_thread }),
-    );
+        std.fmt.comptimePrint("-D BLOCK_SIZE={} -D ITEMS_PER_THREAD={} -cl-uniform-work-group-size -cl-mad-enable -cl-std=CL3.0 -cl-ext=+all", .{ block_size, items_per_thread }),
+    ) catch |err| {
+        if (err == error.BuildProgramFailure) {
+            const log = try program.getBuildLog(a, device);
+            defer a.free(log);
+            std.log.err("failed to compile kernel:\n{s}", .{log});
+        }
+
+        return err;
+    };
 
     const initial_kernel = try cl.Kernel.create(program, "initial");
     errdefer initial_kernel.release();

@@ -26,37 +26,48 @@ stateref_t block_reduce_aligned(
     local stateref_t* merge_table,
     int merge_table_size,
     local stateref_t* storage,
-    stateref_t thread_result
+    stateref_t state
 ) {
-    int thread_id = get_local_id(0);
-    storage[thread_id] = thread_result;
-    barrier(CLK_LOCAL_MEM_FENCE);
-    for (int i = 1; i < 64; i <<= 1) {
-        if (thread_id + i < 64) {
-            thread_result = merge(
-                merge_table,
-                merge_table_size,
-                storage[thread_id + i],
-                thread_result
-            );
-        }
-        storage[thread_id] = thread_result;
+    const int sub_group_size = get_sub_group_size();
+    const int warps = get_num_sub_groups();
+    const int warp_id = get_sub_group_id();
+    const int lane_id = get_sub_group_local_id();
+
+    for (int i = sub_group_size >> 1; i > 0; i >>= 1) {
+        const stateref_t other = sub_group_shuffle_xor(state, i);
+        state = merge(
+            merge_table,
+            merge_table_size,
+            state,
+            other
+        );
     }
-    barrier(CLK_LOCAL_MEM_FENCE);
-    for (int i = 64; i < BLOCK_SIZE; i <<= 1) {
-        if (thread_id + i < BLOCK_SIZE) {
-            thread_result = merge(
-                merge_table,
-                merge_table_size,
-                storage[thread_id + i],
-                thread_result
-            );
-        }
-        barrier(CLK_LOCAL_MEM_FENCE);
-        storage[thread_id] = thread_result;
-        barrier(CLK_LOCAL_MEM_FENCE);
+
+    if (lane_id == 0) {
+        storage[warp_id] = state;
     }
-    return storage[0];
+
+    barrier(CLK_LOCAL_MEM_FENCE);
+
+    // Assume that warps * warps < BLOCK_SIZE
+
+    if (warp_id == 0) {
+        state = storage[warp_id];
+
+        for (int i = sub_group_size >> 1; i > 0; i >>= 1) {
+            if ((lane_id ^ i) < warps) {
+                const stateref_t other = sub_group_shuffle_xor(state, i);
+                state = merge(
+                    merge_table,
+                    merge_table_size,
+                    state,
+                    other
+                );
+            }
+        }
+    }
+
+    return state;
 }
 
 stateref_t block_reduce_limit(
@@ -108,11 +119,7 @@ kernel void initial(
     global stateref_t* output,
     global uint* counter
 ) {
-    // int block_id = get_group_id(0);
     int thread_id = get_local_id(0);
-    // int global_id = get_global_id(0);
-    // int number_of_blocks = get_num_groups(0);
-    // bool is_last_block = block_id == number_of_blocks - 1;
 
     local struct {
         stateref_t initial_table[256];
@@ -144,7 +151,7 @@ kernel void initial(
         int global_id = block_id * BLOCK_SIZE + thread_id;
         bool is_last_block = (block_id + 1) * ITEMS_PER_BLOCK > input_size;
 
-        stateref_t block_result;
+        stateref_t block_state;
         if (is_last_block) {
             unsigned char in[ITEMS_PER_THREAD];
             for (int i = 0; i < ITEMS_PER_THREAD; ++i) {
@@ -171,7 +178,7 @@ kernel void initial(
 
             // Perform the block reduction.
             int valid_items_in_block = (input_size - ITEMS_PER_BLOCK * block_id + ITEMS_PER_THREAD - 1) / ITEMS_PER_THREAD;
-            block_result = block_reduce_limit(
+            block_state = block_reduce_limit(
                 storage.merge_table,
                 merge_table_size,
                 storage.reduce,
@@ -188,7 +195,6 @@ kernel void initial(
             stateref_t states[ITEMS_PER_THREAD];
             for (int i = 0; i < ITEMS_PER_THREAD; ++i) {
                 states[i] = storage.initial_table[in[i]];
-                block_result += states[i];
             }
 
             // Perform the local reduction
@@ -198,7 +204,7 @@ kernel void initial(
             }
 
             // Perform the block reduction.
-            block_result = block_reduce_aligned(
+            block_state = block_reduce_aligned(
                 storage.merge_table,
                 merge_table_size,
                 storage.reduce,
@@ -207,7 +213,7 @@ kernel void initial(
         }
 
         if (thread_id == 0) {
-            output[block_id] = block_result;
+            output[block_id] = block_state;
         }
     }
 }
@@ -230,7 +236,7 @@ kernel void reduce(
         stateref_t reduce[BLOCK_SIZE];
     } storage;
 
-    stateref_t block_result;
+    stateref_t block_state;
     if (is_last_block) {
         stateref_t states[ITEMS_PER_THREAD];
         for (int i = 0; i < ITEMS_PER_THREAD; ++i) {
@@ -249,10 +255,10 @@ kernel void reduce(
 
         barrier(CLK_LOCAL_MEM_FENCE);
         // Perform the local reduction
-        stateref_t local_result_state = states[0];
+        stateref_t thread_state = states[0];
         for (int i = 1; i < ITEMS_PER_THREAD; ++i) {
             if (global_id * ITEMS_PER_THREAD + i < input_size) {
-                local_result_state = merge(storage.merge_table, merge_table_size, local_result_state, states[i]);
+                thread_state = merge(storage.merge_table, merge_table_size, thread_state, states[i]);
             }
         }
 
@@ -260,11 +266,11 @@ kernel void reduce(
 
         // Perform the block reduction.
         int valid_items_in_block = (input_size - ITEMS_PER_BLOCK * block_id + ITEMS_PER_THREAD - 1) / ITEMS_PER_THREAD;
-        block_result = block_reduce_limit(
+        block_state = block_reduce_limit(
             storage.merge_table,
             merge_table_size,
             storage.reduce,
-            local_result_state,
+            thread_state,
             valid_items_in_block
         );
     } else {
@@ -284,23 +290,23 @@ kernel void reduce(
         barrier(CLK_LOCAL_MEM_FENCE);
 
         // Perform the local reduction
-        stateref_t local_result_state = states[0];
+        stateref_t thread_state = states[0];
         for (int i = 1; i < ITEMS_PER_THREAD; ++i) {
-            local_result_state = merge(storage.merge_table, merge_table_size, local_result_state, states[i]);
+            thread_state = merge(storage.merge_table, merge_table_size, thread_state, states[i]);
         }
 
         barrier(CLK_LOCAL_MEM_FENCE);
 
         // Perform the block reduction.
-        block_result = block_reduce_aligned(
+        block_state = block_reduce_aligned(
             storage.merge_table,
             merge_table_size,
             storage.reduce,
-            local_result_state
+            thread_state
         );
     }
 
     if (thread_id == 0) {
-        output[block_id] = block_result;
+        output[block_id] = block_state;
     }
 }

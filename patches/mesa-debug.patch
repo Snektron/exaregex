@@ -1,0 +1,13 @@
+diff --git a/src/gallium/frontends/rusticl/core/device.rs b/src/gallium/frontends/rusticl/core/device.rs
+index b6c74006d6b..ba056d34424 100644
+--- a/src/gallium/frontends/rusticl/core/device.rs
++++ b/src/gallium/frontends/rusticl/core/device.rs
+@@ -639,6 +639,8 @@ impl Device {
+             add_ext(1, 0, 0, "cl_khr_device_uuid");
+         }
+ 
++        println!("AAAAAAAAAAAAAAAAAAA {} {:?} {}", self.subgroups_supported(), self.subgroup_sizes(), self.shareable_shaders());
++
+         if self.subgroups_supported() {
+             // requires CL_DEVICE_SUB_GROUP_INDEPENDENT_FORWARD_PROGRESS
+             //add_ext(1, 0, 0, "cl_khr_subgroups");

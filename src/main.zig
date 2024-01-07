@@ -41,6 +41,11 @@ pub fn main() !void {
     const generation = timer.lap();
     std.debug.print("input generation: {}us\n", .{generation / std.time.ns_per_us});
 
+    for (0..10) |_| {
+        _ = try engine.matches(cp, input);
+    }
+
+    _ = timer.lap();
     const result = try engine.matches(cp, input);
     const kernel = timer.lap();
     std.debug.print("match: {}\n", .{result});

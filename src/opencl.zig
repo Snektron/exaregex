@@ -359,6 +359,13 @@ pub const CommandQueue = extern struct {
 };
 
 pub const Program = extern struct {
+    pub const BuildStatus = enum(c.cl_build_status) {
+        Success = c.CL_BUILD_SUCCESS,
+        None = c.CL_BUILD_NONE,
+        Error = c.CL_BUILD_ERROR,
+        InProgress = c.CL_BUILD_IN_PROGRESS,
+    };
+
     handle: c.cl_program,
 
     pub fn createWithSource(context: Context, source: [:0] const u8) !Program {
@@ -424,6 +431,46 @@ pub const Program = extern struct {
             c.CL_INVALID_OPERATION => unreachable,
             c.CL_COMPILER_NOT_AVAILABLE => error.CompilerNotAvailable,
             c.CL_BUILD_PROGRAM_FAILURE => error.BuildProgramFailure,
+            c.CL_OUT_OF_RESOURCES => error.OutOfDeviceResources,
+            c.CL_OUT_OF_HOST_MEMORY => error.OutOfMemory,
+            else => unreachable, // Undocumented error
+        };
+    }
+
+    pub fn getBuildLog(program: Program, a: Allocator, device: Device) ![]const u8 {
+        var log_size: usize = undefined;
+        switch (c.clGetProgramBuildInfo(
+            program.handle,
+            device.id,
+            c.CL_PROGRAM_BUILD_LOG,
+            0,
+            null,
+            &log_size,
+        )) {
+            c.CL_SUCCESS => {},
+            c.CL_INVALID_DEVICE => unreachable,
+            c.CL_INVALID_VALUE => unreachable,
+            c.CL_INVALID_PROGRAM => unreachable,
+            c.CL_OUT_OF_RESOURCES => return error.OutOfDeviceResources,
+            c.CL_OUT_OF_HOST_MEMORY => return error.OutOfMemory,
+            else => unreachable, // Undocumented error
+        }
+
+        const log = try a.alloc(u8, log_size);
+        errdefer a.free(log);
+
+        return switch (c.clGetProgramBuildInfo(
+            program.handle,
+            device.id,
+            c.CL_PROGRAM_BUILD_LOG,
+            log_size,
+            log.ptr,
+            null,
+        )) {
+            c.CL_SUCCESS => log,
+            c.CL_INVALID_DEVICE => unreachable,
+            c.CL_INVALID_VALUE => unreachable,
+            c.CL_INVALID_PROGRAM => unreachable,
             c.CL_OUT_OF_RESOURCES => error.OutOfDeviceResources,
             c.CL_OUT_OF_HOST_MEMORY => error.OutOfMemory,
             else => unreachable, // Undocumented error

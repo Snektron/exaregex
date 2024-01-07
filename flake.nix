@@ -11,16 +11,22 @@
     pkgs = nixpkgs.legacyPackages.${system};
   in rec {
     packages.${system} = rec {
-      spirv-llvm-translator = (pkgs.spirv-llvm-translator.override {
-        inherit (pkgs.llvmPackages_16) llvm;
-      }).overrideAttrs (old: {
-        version = "16.0.0";
+      meson = pkgs.meson.overrideAttrs (old: rec {
+        version = "1.3.1";
+
         src = pkgs.fetchFromGitHub {
-          owner = "KhronosGroup";
-          repo = "SPIRV-LLVM-Translator";
-          rev = "42de1b449486edb0aa2b764e4f4f3771d3f1a4a3";
-          hash = "sha256-rP7M52IDimfkF62Poa765LUL9dbIKNK5tn1FuS1k+c0=";
+          owner = "mesonbuild";
+          repo = "meson";
+          rev = "refs/tags/${version}";
+          hash = "sha256-KNNtHi3jx0MRiOgmluA4ucZJWB2WeIYdApfHuspbCqg=";
         };
+
+        # The latest patch is already applied, so remove it here.
+        patches = (pkgs.lib.reverseList (builtins.tail (pkgs.lib.reverseList old.patches)));
+      });
+
+      spirv-llvm-translator = (pkgs.spirv-llvm-translator.override {
+        inherit (pkgs.llvmPackages_17) llvm;
       });
 
       mesa = (pkgs.mesa.override {
@@ -29,16 +35,16 @@
         vulkanLayers = [ ];
         withValgrind = false;
         enableGalliumNine = false;
-        llvmPackages_15 = pkgs.llvmPackages_16;
-        inherit spirv-llvm-translator;
+        inherit spirv-llvm-translator meson;
+        llvmPackages_16 = pkgs.llvmPackages_17;
       }).overrideAttrs (old: {
-        version = "23.11.16-git";
+        version = "24.01.07-git";
         src = pkgs.fetchFromGitLab {
           domain = "gitlab.freedesktop.org";
           owner = "mesa";
           repo = "mesa";
-          rev = "e1cf75b411759db0c49673b89b5325fb0442d547";
-          hash = "sha256-o6Exx2Ygjd+uAYze/qLycOO7IY5qq+QjXQg8fdi9cus=";
+          rev = "a84729d36866bc79619523065a6038c3d8444f97";
+          hash = "sha256-TzQDobHhyLuCD/M2xsAwnWIsagfOVkBzvLuzeLrYcFw=";
         };
         # Set some extra flags to create an extra slim build
         mesonFlags = (old.mesonFlags or [ ]) ++ [
@@ -53,7 +59,7 @@
           "--buildtype=debug"
         ];
         # Dirty patch to make one of the nixos-upstream patches working.
-        patches = [ ./patches/mesa-opencl.patch ./patches/mesa-disk-cache-key.patch ];
+        patches = [ ./patches/mesa-opencl.patch ./patches/mesa-disk-cache-key.patch ./patches/mesa-rusticl-bindgen-cpp17.patch ];
       });
 
       oclcpuexp-bin = pkgs.callPackage ({ stdenv, fetchurl, autoPatchelfHook, zlib, tbb_2021_8 }:
