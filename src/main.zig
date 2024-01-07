@@ -32,6 +32,7 @@ pub fn main() !void {
     const cp = try engine.compilePattern(allocator, pattern);
     defer engine.destroyCompiledPattern(allocator, cp);
 
+    std.log.debug("generating input...", .{});
     var timer = try std.time.Timer.start();
     const input = try allocator.alloc(u8, 1024 * 1024 * 1024);
     defer allocator.free(input);

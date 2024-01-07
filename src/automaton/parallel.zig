@@ -59,7 +59,7 @@ pub const ParallelDfa = struct {
         return self.merges[i * self.stateCount() + j];
     }
 
-    /// Return whether `state` is an accpet state.
+    /// Return whether `state` is an accept state.
     pub fn isAccepting(self: ParallelDfa, state: StateRef) bool {
         return switch (state) {
             .reject => false,

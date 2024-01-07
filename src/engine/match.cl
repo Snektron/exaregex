@@ -16,9 +16,6 @@ stateref_t merge(
     stateref_t a,
     stateref_t b
 ) {
-    if (a == 255 || b == 255) {
-        return 255;
-    }
     return merge_table[a * merge_table_size + b];
 }
 

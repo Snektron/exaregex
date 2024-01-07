@@ -205,7 +205,7 @@ pub fn compilePattern(self: *OpenCLEngine, a: Allocator, pattern: Pattern) !Comp
     const cl_initial = try cl.Buffer(u8).createWithData(self.context, .{.read_only = true}, &initial);
     errdefer cl_initial.release();
 
-    const size = pdfa.stateCount();
+    const size = pdfa.stateCount() + 1;
     if (size * size + initial.len > 32768) {
         return error.TodoLargeAutomatons;
     }
@@ -214,10 +214,10 @@ pub fn compilePattern(self: *OpenCLEngine, a: Allocator, pattern: Pattern) !Comp
     defer a.free(merge_table);
     for (merge_table, 0..) |*x, i| {
         x.* = switch (pdfa.merges[i]) {
-            .reject => 255,
+            .reject => 0,
             else => |state| if (@intFromEnum(state) >= 255) {
                 return error.TodoLargeAutomatons;
-            } else @as(u8, @intCast(@intFromEnum(state))),
+            } else @intCast(@intFromEnum(state) + 1),
         };
     }
     std.log.debug("parallel states: {}", .{ size });
@@ -327,8 +327,8 @@ pub fn matches(self: *OpenCLEngine, pattern: CompiledPattern, input: []const u8)
     });
 
     const result_state = switch (result) {
-        255 => .reject,
-        else => @as(ParallelDfa.StateRef, @enumFromInt(result)),
+        0 => .reject,
+        else => @as(ParallelDfa.StateRef, @enumFromInt(result - 1)),
     };
     return pattern.pdfa.isAccepting(result_state);
 }
