@@ -56,10 +56,10 @@ pub fn init(a: Allocator, options: Options) !OpenCLEngine {
         std.log.debug("device: {s}", .{name});
     }
 
-    const context = try cl.Context.create(&.{device}, .{.platform = platform});
+    const context = try cl.Context.create(&.{device}, .{ .platform = platform });
     errdefer context.release();
 
-    const queue = try cl.CommandQueue.create(context, device, .{.profiling = true});
+    const queue = try cl.CommandQueue.create(context, device, .{ .profiling = true });
     errdefer queue.release();
 
     const program = try cl.Program.createWithSource(context, kernel_source);
@@ -105,7 +105,7 @@ pub fn deinit(self: *OpenCLEngine) void {
 fn pickPlatformAndDevice(
     a: Allocator,
     options: Options,
-) !struct{cl.Platform, cl.Device} {
+) !struct { cl.Platform, cl.Device } {
     const platforms = try cl.getPlatforms(a);
     defer a.free(platforms);
 
@@ -160,7 +160,7 @@ fn pickPlatformAndDevice(
 }
 
 fn pickDevice(a: Allocator, platform: cl.Platform, query: ?[]const u8) !cl.Device {
-    const devices = try platform.getDevices(a, .{.gpu = true});
+    const devices = try platform.getDevices(a, .{ .gpu = true, .cpu = true });
     defer a.free(devices);
 
     if (devices.len == 0) {
@@ -202,7 +202,7 @@ pub fn compilePattern(self: *OpenCLEngine, a: Allocator, pattern: Pattern) !Comp
         };
     }
 
-    const cl_initial = try cl.Buffer(u8).createWithData(self.context, .{.read_only = true}, &initial);
+    const cl_initial = try cl.Buffer(u8).createWithData(self.context, .{ .read_only = true }, &initial);
     errdefer cl_initial.release();
 
     const size = pdfa.stateCount() + 1;
@@ -220,9 +220,9 @@ pub fn compilePattern(self: *OpenCLEngine, a: Allocator, pattern: Pattern) !Comp
             } else @intCast(@intFromEnum(state) + 1),
         };
     }
-    std.log.debug("parallel states: {}", .{ size });
-    std.log.debug("merge table size: {}", .{ merge_table.len });
-    const cl_merge_table = try cl.Buffer(u8).createWithData(self.context, .{.read_only = true}, merge_table);
+    std.log.debug("parallel states: {}", .{size});
+    std.log.debug("merge table size: {}", .{merge_table.len});
+    const cl_merge_table = try cl.Buffer(u8).createWithData(self.context, .{ .read_only = true }, merge_table);
     errdefer cl_merge_table.release();
 
     return CompiledPattern{
@@ -282,24 +282,24 @@ pub fn matches(self: *OpenCLEngine, pattern: CompiledPattern, input: []const u8)
         const out_size = std.math.divCeil(usize, size, items_per_block) catch unreachable;
         const out_blocks = std.math.divCeil(usize, size, items_per_block) catch unreachable;
         const new_global_work_size = out_blocks * block_size;
-        std.log.debug("reducing: {} -> {}", .{size, out_size});
+        std.log.debug("reducing: {} -> {}", .{ size, out_size });
 
         const tmp = cl_input;
         cl_input = cl_output;
         cl_output = tmp;
 
-        try self.reduce_kernel.setArg(cl.Buffer(u8), 0, &pattern.merge_table);
-        try self.reduce_kernel.setArg(cl.uint, 1, &@intCast(pattern.pdfa.stateCount()));
-        try self.reduce_kernel.setArg(cl.Buffer(u8), 2, &cl_input);
-        try self.reduce_kernel.setArg(cl.uint, 3, &@intCast(size));
-        try self.reduce_kernel.setArg(cl.Buffer(u8), 4, &cl_output);
+        try self.reduce_kernel.setArg(cl.Buffer(u8), 0, pattern.merge_table);
+        try self.reduce_kernel.setArg(cl.uint, 1, @intCast(pattern.pdfa.stateCount()));
+        try self.reduce_kernel.setArg(cl.Buffer(u8), 2, cl_input);
+        try self.reduce_kernel.setArg(cl.uint, 3, @intCast(size));
+        try self.reduce_kernel.setArg(cl.Buffer(u8), 4, cl_output);
 
         kernel_completed = try self.queue.enqueueNDRangeKernel(
             self.reduce_kernel,
             null,
-             &.{new_global_work_size},
-             &.{block_size},
-             &.{kernel_completed},
+            &.{new_global_work_size},
+            &.{block_size},
+            &.{kernel_completed},
         );
 
         size = out_size;
@@ -322,9 +322,7 @@ pub fn matches(self: *OpenCLEngine, pattern: CompiledPattern, input: []const u8)
 
     std.log.debug("result: {}", .{result});
     std.log.debug("kernel runtime: {}us", .{(stop - start) / std.time.ns_per_us});
-    std.log.debug("kernel throughput: {d:.2} GB/s", .{
-        @as(f32, @floatFromInt(input.len)) / (@as(f32, @floatFromInt(stop - start)) / std.time.ns_per_s) / 1000_000_000
-    });
+    std.log.debug("kernel throughput: {d:.2} GB/s", .{@as(f32, @floatFromInt(input.len)) / (@as(f32, @floatFromInt(stop - start)) / std.time.ns_per_s) / 1000_000_000});
 
     const result_state = switch (result) {
         0 => .reject,

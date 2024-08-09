@@ -13,7 +13,7 @@ pub fn main() !void {
     var pattern = switch (try parse(allocator, regex)) {
         .err => |err| {
             const stderr = std.io.getStdErr().writer();
-            try stderr.print("Error: {}\n{s}\n", .{err.err, regex});
+            try stderr.print("Error: {}\n{s}\n", .{ err.err, regex });
             try stderr.writeByteNTimes(' ', err.offset);
             try stderr.writeAll("^\n");
             return;
@@ -23,8 +23,8 @@ pub fn main() !void {
     defer pattern.deinit(allocator);
 
     var engine = try OpenCLEngine.init(allocator, .{
-        .platform = std.os.getenv("EXAREGEX_PLATFORM"),
-        .device = std.os.getenv("EXAREGEX_DEVICE"),
+        .platform = std.posix.getenv("EXAREGEX_PLATFORM"),
+        .device = std.posix.getenv("EXAREGEX_DEVICE"),
     });
     // var engine = DfaSimulatorEngine.init();
     defer engine.deinit();
