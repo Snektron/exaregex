@@ -1,0 +1,11 @@
+.{
+    .name = "exaregex",
+    .version = "0.1.0",
+    .dependencies = .{
+        .opencl = .{
+            .url = "https://github.com/Snektron/opencl-zig/archive/c747e67e5791c6ca5adea39b5cee8a2b52a8cf37.tar.gz",
+            .hash = "122004f55d0463af584eec1728b8c584b7ae223876bc1bb87d8a2108b668e817311b",
+        },
+    },
+    .paths = .{""},
+}

@@ -11,7 +11,7 @@ const c = @cImport({
     @cInclude("CL/opencl.h");
 });
 
-const cl = @import("../opencl.zig");
+const cl = @import("opencl");
 
 const kernel_source = @embedFile("match.cl");
 const block_size: usize = 768; // Why doesn't 1024 work?
@@ -249,23 +249,23 @@ pub fn matches(self: *OpenCLEngine, pattern: CompiledPattern, input: []const u8)
     std.log.debug("compute units: {}", .{compute_units});
     std.log.debug("work size: {}", .{blocks});
 
-    var cl_input = try cl.Buffer(u8).createWithData(self.context, .{.read_write = true}, input);
+    var cl_input = try cl.Buffer(u8).createWithData(self.context, .{ .read_write = true }, input);
     defer cl_input.release();
 
-    var cl_output = try cl.Buffer(u8).create(self.context, .{.read_write = true}, output_size);
+    var cl_output = try cl.Buffer(u8).create(self.context, .{ .read_write = true }, output_size);
     defer cl_output.release();
 
-    var cl_counter = try cl.Buffer(u32).createWithData(self.context, .{.read_write = true}, &.{blocks});
+    var cl_counter = try cl.Buffer(u32).createWithData(self.context, .{ .read_write = true }, &.{blocks});
     defer cl_counter.release();
 
     // Launch the initial kernel
-    try self.initial_kernel.setArg(cl.Buffer(u8), 0, &pattern.initial);
-    try self.initial_kernel.setArg(cl.Buffer(u8), 1, &pattern.merge_table);
-    try self.initial_kernel.setArg(cl.uint, 2, &@intCast(pattern.pdfa.stateCount()));
-    try self.initial_kernel.setArg(cl.Buffer(u8), 3, &cl_input);
-    try self.initial_kernel.setArg(cl.uint, 4, &@intCast(input.len));
-    try self.initial_kernel.setArg(cl.Buffer(u8), 5, &cl_output);
-    try self.initial_kernel.setArg(cl.Buffer(u32), 6, &cl_counter);
+    try self.initial_kernel.setArg(cl.Buffer(u8), 0, pattern.initial);
+    try self.initial_kernel.setArg(cl.Buffer(u8), 1, pattern.merge_table);
+    try self.initial_kernel.setArg(cl.uint, 2, @intCast(pattern.pdfa.stateCount()));
+    try self.initial_kernel.setArg(cl.Buffer(u8), 3, cl_input);
+    try self.initial_kernel.setArg(cl.uint, 4, @intCast(input.len));
+    try self.initial_kernel.setArg(cl.Buffer(u8), 5, cl_output);
+    try self.initial_kernel.setArg(cl.Buffer(u32), 6, cl_counter);
 
     var kernel_completed = try self.queue.enqueueNDRangeKernel(
         self.initial_kernel,

@@ -4,6 +4,11 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const opencl = b.dependency("opencl", .{
+        .target = target,
+        .optimize = optimize,
+    }).module("opencl");
+
     const exe = b.addExecutable(.{
         .name = "exaregex",
         .root_source_file = b.path("src/main.zig"),
@@ -12,7 +17,7 @@ pub fn build(b: *std.Build) void {
     });
     exe.linkLibC();
     exe.linkSystemLibrary("OpenCL");
-
+    exe.root_module.addImport("opencl", opencl);
     b.installArtifact(exe);
 
     const run_exe = b.addRunArtifact(exe);
