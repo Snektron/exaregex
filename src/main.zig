@@ -1,6 +1,7 @@
 const std = @import("std");
 const parse = @import("parse.zig").parse;
 const OpenCLEngine = @import("engine.zig").OpenCLEngine;
+const HIPEngine = @import("engine.zig").HIPEngine;
 const ParallelDfaSimulatorEngine = @import("engine.zig").ParallelDfaSimulatorEngine;
 const DfaSimulatorEngine = @import("engine.zig").DfaSimulatorEngine;
 
@@ -22,11 +23,13 @@ pub fn main() !void {
     };
     defer pattern.deinit(allocator);
 
-    var engine = try OpenCLEngine.init(allocator, .{
-        .platform = std.posix.getenv("EXAREGEX_PLATFORM"),
-        .device = std.posix.getenv("EXAREGEX_DEVICE"),
-    });
     // var engine = DfaSimulatorEngine.init();
+    // var engine = ParallelDfaSimulatorEngine.init();
+    // var engine = try OpenCLEngine.init(allocator, .{
+    //     .platform = std.posix.getenv("EXAREGEX_PLATFORM"),
+    //     .device = std.posix.getenv("EXAREGEX_DEVICE"),
+    // });
+    var engine = try HIPEngine.init(allocator, .{});
     defer engine.deinit();
 
     const cp = try engine.compilePattern(allocator, pattern);
@@ -34,11 +37,12 @@ pub fn main() !void {
 
     std.log.debug("generating input...", .{});
     var timer = try std.time.Timer.start();
-    const input = try allocator.alloc(u8, 1024 * 1024 * 1024);
+    const input = try allocator.alloc(u8, 1024 * 1024 * 128);
     defer allocator.free(input);
     for (input, 0..) |*x, i| {
         x.* = @intCast(i % 8 + '0');
     }
+    // input[128 * 128 * 128 - 2] = '\xFE';
     const generation = timer.lap();
     std.debug.print("input generation: {}us\n", .{generation / std.time.ns_per_us});
 

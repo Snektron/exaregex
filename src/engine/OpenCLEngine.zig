@@ -7,10 +7,6 @@ const Pattern = @import("../Pattern.zig");
 const automaton = @import("../automaton.zig");
 const ParallelDfa = automaton.parallel.ParallelDfa;
 
-const c = @cImport({
-    @cInclude("CL/opencl.h");
-});
-
 const cl = @import("opencl");
 
 const kernel_source = @embedFile("match.cl");
@@ -67,7 +63,7 @@ pub fn init(a: Allocator, options: Options) !OpenCLEngine {
 
     program.build(
         &.{device},
-        std.fmt.comptimePrint("-D BLOCK_SIZE={} -D ITEMS_PER_THREAD={} -cl-uniform-work-group-size -cl-mad-enable -cl-std=CL3.0 -cl-ext=+all", .{ block_size, items_per_thread }),
+        std.fmt.comptimePrint("-D BLOCK_SIZE={} -D ITEMS_PER_THREAD={} -cl-mad-enable -cl-std=CL3.0", .{ block_size, items_per_thread }),
     ) catch |err| {
         if (err == error.BuildProgramFailure) {
             const log = try program.getBuildLog(a, device);
@@ -190,12 +186,13 @@ pub fn compilePattern(self: *OpenCLEngine, a: Allocator, pattern: Pattern) !Comp
     var dfa = try automaton.subset(a, nfa, .{});
     defer dfa.deinit(a);
 
-    const pdfa = try automaton.parallelize(a, dfa, .{});
+    var pdfa = try automaton.parallelize(a, dfa, .{});
+    errdefer pdfa.deinit(a);
 
     var initial: [256]u8 = undefined;
     for (&initial, 0..) |*x, i| {
         x.* = switch (pdfa.initial_states[i]) {
-            .reject => 255,
+            .reject => 0,
             else => |state| if (@intFromEnum(state) >= 255) {
                 return error.TodoLargeAutomatons;
             } else @as(u8, @intCast(@intFromEnum(state))),
@@ -209,18 +206,26 @@ pub fn compilePattern(self: *OpenCLEngine, a: Allocator, pattern: Pattern) !Comp
     if (size * size + initial.len > 32768) {
         return error.TodoLargeAutomatons;
     }
+    if (size > 120) {
+        return error.TodoLargeAutomatons;
+    }
 
     const merge_table = try a.alloc(u8, size * size);
     defer a.free(merge_table);
-    for (merge_table, 0..) |*x, i| {
-        x.* = switch (pdfa.merges[i]) {
-            .reject => 0,
-            else => |state| if (@intFromEnum(state) >= 255) {
-                return error.TodoLargeAutomatons;
-            } else @intCast(@intFromEnum(state) + 1),
-        };
+    @memset(merge_table, 0); // Fill with reject
+
+    for (0..pdfa.stateCount()) |x| {
+        for (0..pdfa.stateCount()) |y| {
+            const result = pdfa.merge(@enumFromInt(x), @enumFromInt(y));
+            merge_table[(x + 1) * size + (y + 1)] = switch (result) {
+                .reject => 0,
+                else => |state| if (@intFromEnum(state) >= 255) {
+                    return error.TodoLargeAutomatons;
+                } else @intCast(@intFromEnum(state) + 1),
+            };
+        }
     }
-    std.log.debug("parallel states: {}", .{size});
+
     std.log.debug("merge table size: {}", .{merge_table.len});
     const cl_merge_table = try cl.Buffer(u8).createWithData(self.context, .{ .read_only = true }, merge_table);
     errdefer cl_merge_table.release();
