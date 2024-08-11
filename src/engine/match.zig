@@ -39,6 +39,26 @@ inline fn merge(
     return merge_table[a * merge_table_size + b];
 }
 
+inline fn blockLoad(
+    comptime T: type,
+    comptime n: usize,
+    global: *const align(16) addrspace(.global) [n]T,
+) [n]T {
+    const max_load_width = @sizeOf(u128);
+    const total_size = n * @sizeOf(T);
+    const load_width = comptime std.math.gcd(max_load_width, total_size);
+    const LoadType = std.meta.Int(.unsigned, @intCast(load_width * 8));
+    const loads = total_size / load_width;
+
+    var local: [n]T align(16) = undefined;
+
+    const local_casted: *[loads]LoadType = @ptrCast(&local);
+    const global_casted: *const addrspace(.global) [loads]LoadType = @ptrCast(global);
+    @memcpy(local_casted, global_casted);
+
+    return local;
+}
+
 inline fn blockReduceLimit(
     merge_table: [*]addrspace(.shared) const StateRef,
     merge_table_size: u32,
@@ -126,17 +146,8 @@ fn initial(
         const is_aligned_block = (block_id + 1) * items_per_block <= input_size;
 
         const block_state = if (is_aligned_block) blk: {
-            var in: [items_per_thread]u8 align(16) = undefined;
-            // for (&in, 0..) |*c, i| {
-            //     c.* = input[global_id * items_per_thread + i];
-            // }
-
             comptime std.debug.assert(items_per_thread % 16 == 0);
-            const in_long: [*]u128 = @ptrCast(&in);
-            const input_long: [*]const addrspace(.global) u128 = @ptrCast(@alignCast(input[global_id * items_per_thread..]));
-            for (0..items_per_thread / 16) |i| {
-                in_long[i] = input_long[i];
-            }
+            const in = blockLoad(u8, items_per_thread, @alignCast(input[global_id * items_per_thread..][0..items_per_thread]));
 
             // Apply initial mapping
             var states: [items_per_thread]StateRef = undefined;
@@ -218,11 +229,9 @@ fn reduce(
 
     const is_aligned_block = (block_id + 1) * items_per_block <= input_size;
     const block_state = if (is_aligned_block) blk: {
-        var states: [items_per_thread]StateRef = undefined;
-        // TODO: Optimize load!!
-        for (&states, 0..) |*c, i| {
-            c.* = input[global_id * items_per_thread + i];
-        }
+
+        comptime std.debug.assert(items_per_thread % 16 == 0);
+        const states = blockLoad(StateRef, items_per_thread, @alignCast(input[global_id * items_per_thread..][0..items_per_thread]));
 
         var local_result_state: StateRef = states[0];
         for (1..items_per_thread) |i| {
