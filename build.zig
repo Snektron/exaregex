@@ -4,30 +4,38 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const hip_mcpu = b.option([]const u8, "gpu", "Target GPU features to add or subtract") orelse "gfx1101";
-    const hip_target = b.resolveTargetQuery(std.Build.parseTargetQuery(.{
+    const amdgcn_mcpu = b.option([]const u8, "gpu", "Target GPU features to add or subtract") orelse "gfx1101";
+    const amdgcn_target = b.resolveTargetQuery(std.Build.parseTargetQuery(.{
         .arch_os_abi = "amdgcn-amdhsa-none",
-        .cpu_features = hip_mcpu,
+        .cpu_features = amdgcn_mcpu,
     }) catch unreachable);
 
-    const hip_code = b.addSharedLibrary(.{
+    const amdgcn_code = b.addSharedLibrary(.{
         .name = "match-kernel",
         .root_source_file = b.path("src/engine/match.zig"),
-        .target = hip_target,
+        .target = amdgcn_target,
         .optimize = .ReleaseFast,
+        // .optimize = .Debug,
     });
-    hip_code.linker_allow_shlib_undefined = false;
-    hip_code.bundle_compiler_rt = false;
+    amdgcn_code.linker_allow_shlib_undefined = false;
+    amdgcn_code.bundle_compiler_rt = false;
+
+    const dis = b.addSystemCommand(&.{"llvm-objdump", "-dj", ".text"});
+    dis.addFileArg(amdgcn_code.getEmittedBin());
+
+    const dis_step = b.step("dis", "disassemble HIP kernel");
+    dis_step.dependOn(&dis.step);
 
     const offload_bundle_cmd = b.addSystemCommand(&.{
         "clang-offload-bundler",
         "-type=o",
         "-bundle-align=4096",
         // TODO: add sramecc+ xnack+?
-        b.fmt("-targets=host-x86_64-unknown-linux,hipv4-amdgcn-amd-amdhsa--{s}", .{hip_target.result.cpu.model.name}),
+        b.fmt("-targets=host-x86_64-unknown-linux,hipv4-amdgcn-amd-amdhsa--{s}", .{amdgcn_target.result.cpu.model.name}),
         "-input=/dev/null",
     });
-    offload_bundle_cmd.addPrefixedFileArg("-input=", hip_code.getEmittedBin());
+
+    offload_bundle_cmd.addPrefixedFileArg("-input=", amdgcn_code.getEmittedBin());
     const offload_bundle = offload_bundle_cmd.addPrefixedOutputFileArg("-output=", "module.co");
 
     const opencl = b.dependency("opencl", .{
@@ -67,8 +75,15 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    tests.root_module.addImport("opencl", opencl);
     tests.linkLibC();
     tests.linkSystemLibrary("OpenCL");
+    tests.addIncludePath(.{ .cwd_relative = "/opt/rocm/include" });
+    tests.addLibraryPath(.{ .cwd_relative = "/opt/rocm/lib" });
+    tests.linkSystemLibrary("amdhip64");
+    tests.root_module.addAnonymousImport("match-offload-bundle", .{
+        .root_source_file = offload_bundle,
+    });
 
     const run_tests = b.addRunArtifact(tests);
 

@@ -6,6 +6,6 @@ pub const HIPEngine = @import("engine/HIPEngine.zig");
 test {
     _ = DfaSimulatorEngine;
     _ = ParallelDfaSimulatorEngine;
-    _ = OpenCLEngine;
+    // _ = OpenCLEngine;
     _ = HIPEngine;
 }

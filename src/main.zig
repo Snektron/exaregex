@@ -32,29 +32,76 @@ pub fn main() !void {
     var engine = try HIPEngine.init(allocator, .{});
     defer engine.deinit();
 
-    const cp = try engine.compilePattern(allocator, pattern);
-    defer engine.destroyCompiledPattern(allocator, cp);
+    const p = try engine.compilePattern(allocator, pattern);
+    defer engine.destroyCompiledPattern(allocator, p);
 
     std.log.debug("generating input...", .{});
     var timer = try std.time.Timer.start();
-    const input = try allocator.alloc(u8, 1024 * 1024 * 128);
+
+    const size = 1024 * 1024 * 128;
+    const input = try allocator.alloc(u8, size);
     defer allocator.free(input);
-    for (input, 0..) |*x, i| {
-        x.* = @intCast(i % 8 + '0');
-    }
-    // input[128 * 128 * 128 - 2] = '\xFE';
+    const accept = blk: {
+        var dfa_engine = DfaSimulatorEngine.init();
+        defer dfa_engine.deinit();
+        const dfa = try dfa_engine.compilePattern(allocator, pattern);
+        defer dfa_engine.destroyCompiledPattern(allocator, dfa);
+
+        const seed: usize = @bitCast(std.time.milliTimestamp());
+        // const seed: usize = 1723289427195;
+        std.debug.print("seed: {}\n", .{seed});
+        var rng = std.Random.DefaultPrng.init(seed);
+        var random = rng.random();
+        break :blk dfa_engine.generateRandom(dfa, &random, input);
+    };
+
+    // {
+    //     var pdfa_engine = ParallelDfaSimulatorEngine.init();
+    //     defer pdfa_engine.deinit();
+    //     const pdfa = try pdfa_engine.compilePattern(allocator, pattern);
+    //     defer pdfa_engine.destroyCompiledPattern(allocator, pdfa);
+
+    //     var i: usize = 0;
+    //     while (i < input.len) : (i += 128) {
+    //         var state = pdfa.pdfa.initial(input[i]);
+    //         for (input[i..][1..128]) |sym| {
+    //             state = pdfa.pdfa.merge(state, pdfa.pdfa.initial(sym));
+    //         }
+
+    //         const mapped = switch (state) {
+    //             .reject => 0,
+    //             else => @intFromEnum(state) + 1,
+    //         };
+
+    //         std.debug.print("{} ", .{mapped});
+    //         // return pdfa.isAccepting(state);
+    //     }
+    //     std.debug.print("\n", .{});
+    // }
+
+    // const input = try allocator.alloc(u8, 1024 * 1024 * 1024);
+    // defer allocator.free(input);
+    // for (input, 0..) |*x, i| {
+    //     x.* = @intCast(i % 37 + '0');
+    // }
+    // // input[1024 * 1024 * 76 - 16624] = '\xFE';
     const generation = timer.lap();
     std.debug.print("input generation: {}us\n", .{generation / std.time.ns_per_us});
 
     for (0..10) |_| {
-        _ = try engine.matches(cp, input);
+        _ = try engine.matches(p, input);
     }
 
     _ = timer.lap();
-    const result = try engine.matches(cp, input);
+    const match = try engine.matches(p, input);
     const kernel = timer.lap();
-    std.debug.print("match: {}\n", .{result});
+    std.debug.print("match: {}\n", .{match});
+    std.debug.print("expected: {}\n", .{accept});
     std.debug.print("runtime: {}us\n", .{kernel / std.time.ns_per_us});
+
+    if (match != accept) {
+        return error.Fail;
+    }
 }
 
 test {

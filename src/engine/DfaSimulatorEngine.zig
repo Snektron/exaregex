@@ -54,6 +54,25 @@ pub fn matches(self: *DfaSimulatorEngine, pattern: CompiledPattern, input: []con
     return pattern.dfa.states[state].accept;
 }
 
+pub fn generateRandom(
+    self: *DfaSimulatorEngine,
+    pattern: CompiledPattern,
+    rng: *std.Random,
+    buf: []u8,
+) bool {
+    _ = self;
+
+    var state = Dfa.start;
+    for (buf) |*sym| {
+        const options = pattern.dfa.outgoing(state);
+        const transition = options[rng.uintLessThan(usize, options.len)];
+        sym.* = transition.sym;
+        state = transition.dst;
+    }
+
+    return pattern.dfa.states[state].accept;
+}
+
 test "DfaSimulatorEngine" {
     var engine = DfaSimulatorEngine.init();
     defer engine.deinit();

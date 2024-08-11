@@ -2,15 +2,15 @@ const std = @import("std");
 
 const StateRef = u8;
 
-// KEEP SYNCED
 pub const block_size = 512;
-pub const items_per_thread = 16;
+pub const items_per_thread = 32;
 pub const items_per_block = block_size * items_per_thread;
 
 // Custom panic handler, to prevent stack traces etc on this target.
 pub fn panic(msg: []const u8, stack_trace: ?*std.builtin.StackTrace, _: ?usize) noreturn {
     _ = msg;
     _ = stack_trace;
+
     unreachable;
 }
 
@@ -18,7 +18,7 @@ const InitialStorage = struct {
     initial_table: [256]StateRef,
     merge_table: [120 * 120]StateRef,
     reduce: [block_size]StateRef,
-    block_id: i32,
+    counter: i32,
 };
 
 var initial_storage: InitialStorage addrspace(.shared) = undefined;
@@ -50,7 +50,7 @@ inline fn blockReduceLimit(
     var result = thread_result;
 
     exchange[thread_id] = result;
-    asm volatile ("s_barrier");
+    syncthreads();
 
     comptime var i = 1;
     inline while (i < block_size) : (i <<= 1) {
@@ -62,21 +62,30 @@ inline fn blockReduceLimit(
                 exchange[thread_id + i],
             );
         }
-        asm volatile ("s_barrier");
+        syncthreads();
         exchange[thread_id] = result;
-        asm volatile ("s_barrier");
+        syncthreads();
     }
 
     return exchange[0];
 }
 
-export fn initial(
+inline fn syncthreads() void {
+    asm volatile (
+    	\\s_waitcnt lgkmcnt(0)
+    	\\s_barrier
+    	\\s_waitcnt lgkmcnt(0)
+    	::: "memory"
+    );
+}
+
+fn initial(
     initial_table: *addrspace(.global) const [256]StateRef,
     merge_table: [*]addrspace(.global) const StateRef,
     merge_table_size: u32,
-    input: [*]addrspace(.global) const u8,
+    input: [*]align(16) addrspace(.global) const u8,
     input_size: u32,
-    output: [*]addrspace(.global) u8,
+    output: [*]align(16) addrspace(.global) u8,
     counter: *i32,
 ) callconv(.Kernel) void {
     const thread_id = @workItemId(0);
@@ -96,57 +105,37 @@ export fn initial(
         }
     }
 
+    syncthreads();
+
+    const shared_counter: *volatile addrspace(.shared) i32 = &initial_storage.counter;
+
     while (true) {
         if (thread_id == 0) {
-            initial_storage.block_id = @atomicRmw(i32, counter, .Sub, 1, .acquire);
-        }
-        asm volatile ("s_barrier");
-        const i_block_id = initial_storage.block_id;
-
-        if (i_block_id < 0) {
-            return;
+            shared_counter.* = @atomicRmw(i32, counter, .Sub, 1, .acquire);
         }
 
-        const block_id: u32 = @intCast(i_block_id);
+        syncthreads();
+        const count = shared_counter.*;
+        if (count <= 0) {
+            break;
+        }
+
+        const block_id: u32 = @intCast(count - 1);
 
         const global_id = block_id * block_size + thread_id;
-        const is_last_block = (block_id + 1) * items_per_block > input_size;
-        const block_state: StateRef = if (is_last_block) blk: {
-            var in: [items_per_thread]u8 = undefined;
-            for (&in, 0..) |*c, i| {
-                if (global_id * items_per_thread + i < input_size) {
-                    c.* = input[global_id * items_per_thread + i];
-                }
-            }
+        const is_aligned_block = (block_id + 1) * items_per_block <= input_size;
 
-            // Apply initial mapping
-            var states: [items_per_thread]StateRef = undefined;
-            for (0..items_per_thread) |i| {
-                if (global_id * items_per_thread + i < input_size) {
-                    states[i] = initial_table[in[i]];
-                }
-            }
+        const block_state = if (is_aligned_block) blk: {
+            var in: [items_per_thread]u8 align(16) = undefined;
+            // for (&in, 0..) |*c, i| {
+            //     c.* = input[global_id * items_per_thread + i];
+            // }
 
-            var local_result_state: StateRef = states[0];
-            for (1..items_per_thread) |i| {
-                if (global_id * items_per_thread + i < input_size) {
-                    local_result_state = merge(&initial_storage.merge_table, merge_table_size, local_result_state, states[i]);
-                }
-            }
-
-            const valid_items_in_block = (input_size - items_per_block * block_id + items_per_thread - 1) / items_per_thread;
-            break :blk blockReduceLimit(
-                &initial_storage.merge_table,
-                merge_table_size,
-                &initial_storage.reduce,
-                local_result_state,
-                valid_items_in_block,
-            );
-        } else blk: {
-            var in: [items_per_thread]u8 = undefined;
-            // TODO: Optimize load!!
-            for (&in, 0..) |*c, i| {
-                c.* = input[global_id * items_per_thread + i];
+            comptime std.debug.assert(items_per_thread % 16 == 0);
+            const in_long: [*]u128 = @ptrCast(&in);
+            const input_long: [*]const addrspace(.global) u128 = @ptrCast(@alignCast(input[global_id * items_per_thread..]));
+            for (0..items_per_thread / 16) |i| {
+                in_long[i] = input_long[i];
             }
 
             // Apply initial mapping
@@ -167,6 +156,37 @@ export fn initial(
                 local_result_state,
                 block_size,
             );
+        } else blk: {
+            var in: [items_per_thread]u8 = undefined;
+            for (&in, 0..) |*c, i| {
+                if (global_id * items_per_thread + i < input_size) {
+                    c.* = input[global_id * items_per_thread + i];
+                }
+            }
+
+            // Apply initial mapping
+            var states: [items_per_thread]StateRef = undefined;
+            for (0..items_per_thread) |i| {
+                if (global_id * items_per_thread + i < input_size) {
+                    states[i] = initial_storage.initial_table[in[i]];
+                }
+            }
+
+            var local_result_state: StateRef = states[0];
+            for (1..items_per_thread) |i| {
+                if (global_id * items_per_thread + i < input_size) {
+                    local_result_state = merge(&initial_storage.merge_table, merge_table_size, local_result_state, states[i]);
+                }
+            }
+
+            const valid_items_in_block = (input_size - items_per_block * block_id + items_per_thread - 1) / items_per_thread;
+            break :blk blockReduceLimit(
+                &initial_storage.merge_table,
+                merge_table_size,
+                &initial_storage.reduce,
+                local_result_state,
+                valid_items_in_block,
+            );
         };
 
         if (thread_id == 0) {
@@ -175,7 +195,7 @@ export fn initial(
     }
 }
 
-export fn reduce(
+fn reduce(
     merge_table: [*]addrspace(.global) const StateRef,
     merge_table_size: u32,
     input: [*]addrspace(.global) const StateRef,
@@ -194,10 +214,29 @@ export fn reduce(
         }
     }
 
-    asm volatile ("s_barrier");
+    syncthreads();
 
-    const is_last_block = true; //(block_id + 1) * items_per_block > input_size;
-    const block_state: StateRef = if (is_last_block) blk: {
+    const is_aligned_block = (block_id + 1) * items_per_block <= input_size;
+    const block_state = if (is_aligned_block) blk: {
+        var states: [items_per_thread]StateRef = undefined;
+        // TODO: Optimize load!!
+        for (&states, 0..) |*c, i| {
+            c.* = input[global_id * items_per_thread + i];
+        }
+
+        var local_result_state: StateRef = states[0];
+        for (1..items_per_thread) |i| {
+            local_result_state = merge(&initial_storage.merge_table, merge_table_size, local_result_state, states[i]);
+        }
+
+        break :blk blockReduceLimit(
+            &initial_storage.merge_table,
+            merge_table_size,
+            &initial_storage.reduce,
+            local_result_state,
+            block_size,
+        );
+    } else blk: {
         var states: [items_per_thread]StateRef = undefined;
         for (&states, 0..) |*c, i| {
             if (global_id * items_per_thread + i < input_size) {
@@ -220,28 +259,16 @@ export fn reduce(
             local_result_state,
             valid_items_in_block,
         );
-    } else blk: {
-        var states: [items_per_thread]StateRef = undefined;
-        // TODO: Optimize load!!
-        for (&states, 0..) |*c, i| {
-            c.* = input[global_id * items_per_thread + i];
-        }
-
-        var local_result_state: StateRef = states[0];
-        for (1..items_per_thread) |i| {
-            local_result_state = merge(&initial_storage.merge_table, merge_table_size, local_result_state, states[i]);
-        }
-
-        break :blk blockReduceLimit(
-            &initial_storage.merge_table,
-            merge_table_size,
-            &initial_storage.reduce,
-            local_result_state,
-            block_size,
-        );
     };
 
     if (thread_id == 0) {
         output[block_id] = block_state;
+    }
+}
+
+comptime {
+    if (@import("builtin").cpu.arch == .amdgcn) {
+        @export(initial, .{ .name = "initial" });
+        @export(reduce, .{ .name = "reduce" });
     }
 }

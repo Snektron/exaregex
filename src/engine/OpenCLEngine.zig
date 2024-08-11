@@ -338,8 +338,8 @@ pub fn matches(self: *OpenCLEngine, pattern: CompiledPattern, input: []const u8)
 
 test "OpenCLEngine" {
     var engine = try OpenCLEngine.init(std.testing.allocator, .{
-        .platform = std.os.getenv("EXAREGEX_PLATFORM"),
-        .device = std.os.getenv("EXAREGEX_DEVICE"),
+        .platform = std.posix.getenv("EXAREGEX_PLATFORM"),
+        .device = std.posix.getenv("EXAREGEX_DEVICE"),
     });
     defer engine.deinit();
 

@@ -1,5 +1,7 @@
 const HIPEngine = @This();
 
+const kernel = @import("match.zig");
+
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
@@ -9,9 +11,9 @@ const ParallelDfa = automaton.parallel.ParallelDfa;
 
 const hip = @import("../hip.zig");
 
-pub const block_size: usize = 512;
-pub const items_per_thread: usize = 16;
-pub const items_per_block = block_size * items_per_thread;
+const block_size = kernel.block_size;
+const items_per_thread = kernel.items_per_thread;
+const items_per_block = kernel.items_per_block;
 
 module: hip.Module,
 initial_kernel: hip.Function,
@@ -118,7 +120,7 @@ pub fn destroyCompiledPattern(self: *HIPEngine, a: Allocator, pattern: CompiledP
 }
 
 pub fn matches(self: *HIPEngine, pattern: CompiledPattern, input: []const u8) !bool {
-    const compute_units = 120; // TODO: Get this from somewhere
+    const compute_units = 200; // TODO: Get this from somewhere
     const blocks: u32 = @intCast(std.math.divCeil(usize, input.len, items_per_block) catch unreachable);
 
     const output_size = blocks;
@@ -132,9 +134,6 @@ pub fn matches(self: *HIPEngine, pattern: CompiledPattern, input: []const u8) !b
 
     var d_output = try hip.malloc(u8, output_size);
     defer hip.free(d_output);
-
-    const d_debug = try hip.malloc(u32, 1);
-    defer hip.free(d_debug);
 
     const d_counter = try hip.malloc(i32, 1);
     defer hip.free(d_counter);
@@ -162,12 +161,11 @@ pub fn matches(self: *HIPEngine, pattern: CompiledPattern, input: []const u8) !b
             @as(u32, @intCast(input.len)),
             d_output.ptr,
             d_counter.ptr,
-            // d_debug.ptr,
         },
     );
 
-    // _ = &d_input;
-    // _ = &d_output;
+    _ = &d_input;
+    _ = &d_output;
 
     var size: u32 = output_size;
     while (size > 1) {
@@ -188,39 +186,39 @@ pub fn matches(self: *HIPEngine, pattern: CompiledPattern, input: []const u8) !b
                 d_input.ptr,
                 size,
                 d_output.ptr,
-                // out_blocks == 1,
             },
         );
 
         size = out_size;
-        break;
     }
 
     end.record(null);
 
-    var result: [256]u8 = undefined;
-    hip.memcpy(u8, (&result)[0..256], d_output[0..256], .device_to_host);
-
-    var debug: [1]u32 = undefined;
-    hip.memcpy(u32, &debug, d_debug, .device_to_host);
+    var result: u8 = undefined;
+    hip.memcpy(u8, (&result)[0..1], d_output[0..1], .device_to_host);
 
     const elapsed = hip.Event.elapsed(begin, end);
-    std.log.debug("result: {}", .{result[0]});
-
-    // for (0..256) |i| {
-    //     std.log.debug("{}: {}", .{i, result[i]});
-    // }
-    // std.log.debug("{}: {}", .{255, result[255]});
-    // for (debug, 0..) |x, i| {
-    //     std.log.debug("debug {}: {}", .{i, x});
-    // }
-
+    std.log.debug("result: {}", .{result});
     std.log.debug("kernel runtime: {d:.2}us", .{elapsed * std.time.us_per_ms});
     std.log.debug("kernel throughput: {d:.2} GB/s", .{@as(f32, @floatFromInt(input.len)) / (elapsed / std.time.ms_per_s) / 1000_000_000});
 
-    const result_state = switch (result[0]) {
+    const result_state = switch (result) {
         0 => .reject,
-        else => @as(ParallelDfa.StateRef, @enumFromInt(result[0] - 1)),
+        else => @as(ParallelDfa.StateRef, @enumFromInt(result - 1)),
     };
     return pattern.pdfa.isAccepting(result_state);
+}
+
+test "HIPEngine - cases" {
+    var engine = try HIPEngine.init(std.testing.allocator, .{});
+    defer engine.deinit();
+
+    try @import("test.zig").testEngineCases(HIPEngine, &engine);
+}
+
+test "HIPEngine - utf8 fuzz" {
+    var engine = try HIPEngine.init(std.testing.allocator, .{});
+    defer engine.deinit();
+
+    try @import("test.zig").testEngineFuzzUtf8(HIPEngine, &engine);
 }
