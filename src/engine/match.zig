@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 const StateRef = u8;
 
@@ -91,12 +92,22 @@ inline fn blockReduceLimit(
 }
 
 inline fn syncthreads() void {
-    asm volatile (
-    	\\s_waitcnt lgkmcnt(0)
-    	\\s_barrier
-    	\\s_waitcnt lgkmcnt(0)
-    	::: "memory"
-    );
+    switch (builtin.cpu.arch) {
+        .amdgcn => {
+            asm volatile (
+                \\s_waitcnt lgkmcnt(0)
+                \\s_barrier
+                \\s_waitcnt lgkmcnt(0)
+                ::: "memory"
+            );
+        },
+        .nvptx, .nvptx64 => {
+            asm volatile (
+                \\bar.sync 0;
+            );
+        },
+        else => unreachable,
+    }
 }
 
 fn initial(
@@ -106,7 +117,7 @@ fn initial(
     input: [*]align(16) addrspace(.global) const u8,
     input_size: u32,
     output: [*]align(16) addrspace(.global) u8,
-    counter: *i32,
+    counter: *addrspace(.global) i32,
 ) callconv(.Kernel) void {
     const thread_id = @workItemId(0);
 
@@ -135,9 +146,10 @@ fn initial(
         }
 
         syncthreads();
+
         const count = shared_counter.*;
         if (count <= 0) {
-            break;
+            return;
         }
 
         const block_id: u32 = @intCast(count - 1);
@@ -276,8 +288,11 @@ fn reduce(
 }
 
 comptime {
-    if (@import("builtin").cpu.arch == .amdgcn) {
-        @export(initial, .{ .name = "initial" });
-        @export(reduce, .{ .name = "reduce" });
+    switch (builtin.cpu.arch) {
+        .amdgcn, .nvptx, .nvptx64 => {
+            @export(initial, .{ .name = "initial" });
+            @export(reduce, .{ .name = "reduce" });
+        },
+        else => {},
     }
 }

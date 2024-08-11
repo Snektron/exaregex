@@ -9,7 +9,7 @@ const Pattern = @import("../Pattern.zig");
 const automaton = @import("../automaton.zig");
 const ParallelDfa = automaton.parallel.ParallelDfa;
 
-const hip = @import("../hip.zig");
+const hip = @import("../cuda.zig");
 
 const block_size = kernel.block_size;
 const items_per_thread = kernel.items_per_thread;
@@ -32,7 +32,10 @@ pub fn init(a: Allocator, options: Options) !HIPEngine {
     _ = options;
 
     std.log.debug("loading HIP module", .{});
-    const module = try hip.Module.loadData(@embedFile("match-offload-bundle"));
+
+    hip.init();
+
+    const module = try hip.Module.loadData(@embedFile("match-module"));
     errdefer module.unload();
 
     return .{
