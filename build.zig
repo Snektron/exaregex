@@ -74,36 +74,26 @@ pub fn build(b: *std.Build) void {
             amdgcn_code.linker_allow_shlib_undefined = false;
             amdgcn_code.bundle_compiler_rt = false;
 
+            const amdgcn_module = amdgcn_code.getEmittedBin();
+
             const dis = b.addSystemCommand(&.{"llvm-objdump", "-dj", ".text"});
-            dis.addFileArg(amdgcn_code.getEmittedBin());
+            dis.addFileArg(amdgcn_module);
 
             const dis_step = b.step("dis", "disassemble HIP kernel");
             dis_step.dependOn(&dis.step);
-
-            const offload_bundle_cmd = b.addSystemCommand(&.{
-                "clang-offload-bundler",
-                "-type=o",
-                "-bundle-align=4096",
-                // TODO: add sramecc+ xnack+?
-                b.fmt("-targets=host-x86_64-unknown-linux,hipv4-amdgcn-amd-amdhsa--{s}", .{amdgcn_target.result.cpu.model.name}),
-                "-input=/dev/null",
-            });
-
-            offload_bundle_cmd.addPrefixedFileArg("-input=", amdgcn_code.getEmittedBin());
-            const offload_bundle = offload_bundle_cmd.addPrefixedOutputFileArg("-output=", "module.co");
 
             exe.addIncludePath(hip.path("include"));
             exe.addLibraryPath(.{ .cwd_relative = "/opt/rocm/lib" });
             exe.linkSystemLibrary("amdhip64");
             exe.root_module.addAnonymousImport("match-module", .{
-                .root_source_file = offload_bundle,
+                .root_source_file = amdgcn_module,
             });
 
             tests.addIncludePath(hip.path("include"));
             tests.addLibraryPath(.{ .cwd_relative = "/opt/rocm/lib" });
             tests.linkSystemLibrary("amdhip64");
             tests.root_module.addAnonymousImport("match-module", .{
-                .root_source_file = offload_bundle,
+                .root_source_file = amdgcn_module,
             });
         },
         .cuda => {
