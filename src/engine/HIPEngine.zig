@@ -1,5 +1,7 @@
 const HIPEngine = @This();
 
+const build_options = @import("build_options");
+
 const kernel = @import("match.zig");
 
 const std = @import("std");
@@ -9,7 +11,10 @@ const Pattern = @import("../Pattern.zig");
 const automaton = @import("../automaton.zig");
 const ParallelDfa = automaton.parallel.ParallelDfa;
 
-const hip = @import("../cuda.zig");
+const hip = switch (build_options.gpu_runtime) {
+    .hip => @import("../hip.zig"),
+    .cuda => @import("../cuda.zig"),
+};
 
 const block_size = kernel.block_size;
 const items_per_thread = kernel.items_per_thread;

@@ -16,6 +16,9 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     }).module("opencl");
 
+    const opts = b.addOptions();
+    opts.addOption(GpuRuntime, "gpu_runtime", runtime);
+
     const exe = b.addExecutable(.{
         .name = "exaregex",
         .root_source_file = b.path("src/main.zig"),
@@ -25,6 +28,7 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("opencl", opencl);
     exe.linkLibC();
     exe.linkSystemLibrary("OpenCL");
+    exe.root_module.addOptions("build_options", opts);
     b.installArtifact(exe);
 
     const run_exe = b.addRunArtifact(exe);
@@ -103,35 +107,26 @@ pub fn build(b: *std.Build) void {
             });
         },
         .cuda => {
-            // Below compilation doesn't work well yet.
-            // For now just use the pre-compiled ptx module
-            // zig build-obj -target nvptx64-cuda -mcpu=sm_80 src/engine/match.zig -femit-asm=src/engine/match.ptx -fno-emit-bin -O ReleaseFast
+            const nvptx_mcpu = b.option([]const u8, "gpu", "Target GPU features to add or subtract") orelse "sm_80";
+            const nvptx_target = b.resolveTargetQuery(std.Build.parseTargetQuery(.{
+                .arch_os_abi = "nvptx64-cuda-none",
+                .cpu_features = nvptx_mcpu,
+            }) catch unreachable);
 
-            // const nvptx_mcpu = b.option([]const u8, "gpu", "Target GPU features to add or subtract") orelse "sm_80";
-            // const nvptx_target = b.resolveTargetQuery(std.Build.parseTargetQuery(.{
-            //     .arch_os_abi = "nvptx64-cuda-none",
-            //     .cpu_features = nvptx_mcpu,
-            // }) catch unreachable);
+            const nvptx_code = b.addSharedLibrary(.{
+                .name = "match-kernel",
+                .root_source_file = b.path("src/engine/match.zig"),
+                .target = nvptx_target,
+                .optimize = .ReleaseFast,
+            });
+            nvptx_code.linker_allow_shlib_undefined = false;
+            nvptx_code.bundle_compiler_rt = false;
 
-            // const nvptx_code = b.addSharedLibrary(.{
-            //     .name = "match-kernel",
-            //     .root_source_file = b.path("src/engine/match.zig"),
-            //     .target = nvptx_target,
-            //     .optimize = .ReleaseFast,
-            // });
-            // nvptx_code.linker_allow_shlib_undefined = false;
-            // nvptx_code.bundle_compiler_rt = false;
-
-            // const nvptx_module = nvptx_code.getEmittedAsm();
-            // exe.step.dependOn(&nvptx_code.step);
-            // tests.step.dependOn(&nvptx_code.step);
-
-            const nvptx_module = b.path("src/engine/match.ptx");
+            const nvptx_module = nvptx_code.getEmittedAsm();
 
             exe.addIncludePath(.{ .cwd_relative = "/usr/local/cuda/include" });
             exe.addLibraryPath(.{ .cwd_relative = "/usr/local/cuda/lib64" });
             exe.linkSystemLibrary("cuda");
-            // exe.linkSystemLibrary("cudart");
             exe.root_module.addAnonymousImport("match-module", .{
                 .root_source_file = nvptx_module,
             });
@@ -139,7 +134,6 @@ pub fn build(b: *std.Build) void {
             exe.addIncludePath(.{ .cwd_relative = "/usr/local/cuda/include" });
             tests.addLibraryPath(.{ .cwd_relative = "/usr/local/cuda/lib64" });
             tests.linkSystemLibrary("cuda");
-            // tests.linkSystemLibrary("cudart");
             tests.root_module.addAnonymousImport("match-module", .{
                 .root_source_file = nvptx_module,
             });
