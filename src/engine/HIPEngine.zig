@@ -20,11 +20,38 @@ const block_size = kernel.block_size;
 const items_per_thread = kernel.items_per_thread;
 const items_per_block = kernel.items_per_block;
 
+options: Options,
 module: hip.Module,
 initial_kernel: hip.Function,
 reduce_kernel: hip.Function,
 
-pub const Options = struct {};
+pub const Statistics = struct {
+    upload: Stat = .{},
+    kernel: Stat = .{},
+    download: Stat = .{},
+
+    pub fn reset(stats: *Statistics) void {
+        stats.* = .{};
+    }
+
+    pub const Stat = struct {
+        total_runtime: f64 = 0,
+        hits: u32 = 0,
+
+        pub fn addHit(self: *Stat, time: f32) void {
+            self.total_runtime += @floatCast(time);
+            self.hits += 1;
+        }
+
+        pub fn avg(self: Stat) f64 {
+            return self.total_runtime / @as(f64, @floatFromInt(self.hits));
+        }
+    };
+};
+
+pub const Options = struct {
+    collect_stats: ?*Statistics = null,
+};
 
 pub const CompiledPattern = struct {
     pdfa: ParallelDfa,
@@ -34,7 +61,6 @@ pub const CompiledPattern = struct {
 
 pub fn init(a: Allocator, options: Options) !HIPEngine {
     _ = a;
-    _ = options;
 
     std.log.debug("loading HIP module", .{});
 
@@ -44,6 +70,7 @@ pub fn init(a: Allocator, options: Options) !HIPEngine {
     errdefer module.unload();
 
     return .{
+        .options = options,
         .module = module,
         .initial_kernel = try module.getFunction("initial"),
         .reduce_kernel = try module.getFunction("reduce"),
@@ -127,14 +154,46 @@ pub fn destroyCompiledPattern(self: *HIPEngine, a: Allocator, pattern: CompiledP
     hip.free(pattern.d_merge_table);
 }
 
+const Events = struct {
+    start: hip.Event,
+    upload: hip.Event,
+    match: hip.Event,
+    download: hip.Event,
+
+    fn init() Events {
+        return .{
+            .start = hip.Event.create(),
+            .upload = hip.Event.create(),
+            .match = hip.Event.create(),
+            .download = hip.Event.create(),
+        };
+    }
+
+    fn deinit(events: Events) void {
+        events.start.destroy();
+        events.upload.destroy();
+        events.match.destroy();
+        events.download.destroy();
+    }
+};
+
 pub fn matches(self: *HIPEngine, pattern: CompiledPattern, input: []const u8) !bool {
+    const events = if (self.options.collect_stats != null)
+        Events.init()
+    else
+        null;
+
+    defer if (events) |es| es.deinit();
+
+    if (events) |es| es.start.record(null);
+
     const compute_units = 200; // TODO: Get this from somewhere
     const blocks: u32 = @intCast(std.math.divCeil(usize, input.len, items_per_block) catch unreachable);
 
     const output_size = blocks;
 
-    std.log.debug("compute units: {}", .{compute_units});
-    std.log.debug("work size: {}", .{blocks});
+    // std.log.debug("compute units: {}", .{compute_units});
+    // std.log.debug("work size: {}", .{blocks});
 
     var d_input = try hip.malloc(u8, input.len);
     defer hip.free(d_input);
@@ -148,13 +207,7 @@ pub fn matches(self: *HIPEngine, pattern: CompiledPattern, input: []const u8) !b
     const i_blocks: i32 = @intCast(blocks);
     hip.memcpy(i32, d_counter, (&i_blocks)[0..1], .host_to_device);
 
-    const begin = hip.Event.create();
-    defer begin.destroy();
-
-    const end = hip.Event.create();
-    defer end.destroy();
-
-    begin.record(null);
+    if (events) |es| es.upload.record(null);
 
     self.initial_kernel.launch(
         .{
@@ -179,7 +232,7 @@ pub fn matches(self: *HIPEngine, pattern: CompiledPattern, input: []const u8) !b
     while (size > 1) {
         const out_size: u32 = @intCast(std.math.divCeil(usize, size, items_per_block) catch unreachable);
         const out_blocks: u32 = @intCast(std.math.divCeil(usize, size, items_per_block) catch unreachable);
-        std.log.debug("reducing: {} -> {}", .{ size, out_size });
+        // std.log.debug("reducing: {} -> {}", .{ size, out_size });
 
         std.mem.swap([]u8, &d_input, &d_output);
 
@@ -200,15 +253,27 @@ pub fn matches(self: *HIPEngine, pattern: CompiledPattern, input: []const u8) !b
         size = out_size;
     }
 
-    end.record(null);
+    if (events) |es| es.match.record(null);
 
     var result: u8 = undefined;
     hip.memcpy(u8, (&result)[0..1], d_output[0..1], .device_to_host);
 
-    const elapsed = hip.Event.elapsed(begin, end);
-    std.log.debug("result: {}", .{result});
-    std.log.debug("kernel runtime: {d:.2}us", .{elapsed * std.time.us_per_ms});
-    std.log.debug("kernel throughput: {d:.2} GB/s", .{@as(f32, @floatFromInt(input.len)) / (elapsed / std.time.ms_per_s) / 1000_000_000});
+    if (events) |es| es.download.record(null);
+
+    if (self.options.collect_stats) |stats| {
+        const es = events.?;
+        es.download.synchronize();
+
+        stats.upload.addHit(hip.Event.elapsed(es.start, es.upload));
+        stats.kernel.addHit(hip.Event.elapsed(es.upload, es.match));
+        stats.download.addHit(hip.Event.elapsed(es.match, es.download));
+
+        // const elapsed = hip.Event.elapsed(begin, end);
+        // std.log.debug("result: {}", .{result});
+        // std.log.debug("kernel runtime: {d:.2}us", .{elapsed * std.time.us_per_ms});
+        // std.log.debug("kernel throughput: {d:.2} GB/s", .{@as(f32, @floatFromInt(input.len)) / (elapsed / std.time.ms_per_s) / 1000_000_000});
+
+    }
 
     const result_state = switch (result) {
         0 => .reject,

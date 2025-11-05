@@ -97,7 +97,7 @@ inline fn syncthreads() void {
             // gfx12
             if (comptime std.mem.startsWith(u8, builtin.cpu.model.name, "gfx12")) {
                 asm volatile (
-                    // Sync shared memory
+                // Sync shared memory
                     \\s_wait_dscnt 0x0
                     \\s_barrier_signal -1
                     \\s_barrier_wait -1

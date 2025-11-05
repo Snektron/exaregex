@@ -5,6 +5,10 @@ const HIPEngine = @import("engine.zig").HIPEngine;
 const ParallelDfaSimulatorEngine = @import("engine.zig").ParallelDfaSimulatorEngine;
 const DfaSimulatorEngine = @import("engine.zig").DfaSimulatorEngine;
 
+pub const std_options: std.Options = .{
+    .log_level = .debug,
+};
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -26,13 +30,17 @@ pub fn main() !void {
     };
     defer pattern.deinit(allocator);
 
+    var stats: HIPEngine.Statistics = .{};
+
     // var engine = DfaSimulatorEngine.init();
     // var engine = ParallelDfaSimulatorEngine.init();
     // var engine = try OpenCLEngine.init(allocator, .{
     //     .platform = std.posix.getenv("EXAREGEX_PLATFORM"),
     //     .device = std.posix.getenv("EXAREGEX_DEVICE"),
     // });
-    var engine = try HIPEngine.init(allocator, .{});
+    var engine = try HIPEngine.init(allocator, .{
+        .collect_stats = &stats,
+    });
     defer engine.deinit();
 
     const p = try engine.compilePattern(allocator, pattern);
@@ -50,29 +58,43 @@ pub fn main() !void {
         const dfa = try dfa_engine.compilePattern(allocator, pattern);
         defer dfa_engine.destroyCompiledPattern(allocator, dfa);
 
-        var buf: [8]u8 = undefined;
-        try std.posix.getrandom(&buf);
-        const seed: usize = @bitCast(buf);
-
-        std.debug.print("seed: {}\n", .{seed});
+        const seed = std.crypto.random.int(usize);
+        std.log.debug("seed: {}", .{seed});
         var rng = std.Random.DefaultPrng.init(seed);
         var random = rng.random();
         break :blk dfa_engine.generateRandom(dfa, &random, input);
     };
 
     const generation = timer.lap();
-    std.debug.print("input generation: {}us\n", .{generation / std.time.ns_per_us});
+    std.log.info("input generation: {}us", .{generation / std.time.ns_per_us});
 
+    // Warmup
     for (0..10) |_| {
         _ = try engine.matches(p, input);
     }
 
+    stats.reset();
+    // for realz
+    for (0..10) |_| {
+        _ = try engine.matches(p, input);
+    }
+
+    const final_stats = stats;
+
     _ = timer.lap();
     const match = try engine.matches(p, input);
     const kernel = timer.lap();
-    std.debug.print("match: {}\n", .{match});
-    std.debug.print("expected: {}\n", .{accept});
-    std.debug.print("runtime: {}us\n", .{kernel / std.time.ns_per_us});
+    std.log.info("match: {}", .{match});
+    std.log.info("expected: {}", .{accept});
+    std.log.info("total runtime: {}us", .{kernel / std.time.ns_per_us});
+
+    std.log.info("input size: {} bytes", .{size});
+    std.log.info("avg upload time: {:.3} us", .{final_stats.upload.avg() * std.time.us_per_ms});
+    std.log.info("avg kernel time: {:.3} us", .{final_stats.kernel.avg() * std.time.us_per_ms});
+    std.log.info("avg download time: {:.3} us", .{final_stats.download.avg() * std.time.us_per_ms});
+
+    std.log.info("upload performance: {:.3} GB/s", .{size / final_stats.upload.avg() / 1_000_000});
+    std.log.info("kernel performance: {:.3} GB/s", .{size / final_stats.kernel.avg() / 1_000_000});
 
     if (match != accept) {
         return error.Fail;
