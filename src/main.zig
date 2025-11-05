@@ -13,10 +13,13 @@ pub fn main() !void {
     const regex = "(([\\x00-\\x7F])|([\\xC2-\\xDF][\\x80-\\xBF])|((([\\xE0][\\xA0-\\xBF])|([\\xE1-\\xEC\\xEE-\\xEF][\\x80-\\xBF])|([\\xED][\\x80-\\x9F]))[\\x80-\\xBF])|((([\\xF0][\\x90-\\xBF])|([\\xF1-\\xF3][\\x80-\\xBF])|([\\xF4][\\x80-\\x8F]))[\\x80-\\xBF][\\x80-\\xBF]))*";
     var pattern = switch (try parse(allocator, regex)) {
         .err => |err| {
-            const stderr = std.io.getStdErr().writer();
+            var buf: [1024]u8 = undefined;
+            var stderr_writer = std.fs.File.stderr().writer(&buf);
+            var stderr = stderr_writer.interface;
             try stderr.print("Error: {}\n{s}\n", .{ err.err, regex });
-            try stderr.writeByteNTimes(' ', err.offset);
+            try stderr.splatByteAll(' ', err.offset);
             try stderr.writeAll("^\n");
+            try stderr.flush();
             return;
         },
         .pattern => |pattern| pattern,
@@ -47,44 +50,16 @@ pub fn main() !void {
         const dfa = try dfa_engine.compilePattern(allocator, pattern);
         defer dfa_engine.destroyCompiledPattern(allocator, dfa);
 
-        const seed: usize = @bitCast(std.time.milliTimestamp());
-        // const seed: usize = 1723289427195;
+        var buf: [8]u8 = undefined;
+        try std.posix.getrandom(&buf);
+        const seed: usize = @bitCast(buf);
+
         std.debug.print("seed: {}\n", .{seed});
         var rng = std.Random.DefaultPrng.init(seed);
         var random = rng.random();
         break :blk dfa_engine.generateRandom(dfa, &random, input);
     };
 
-    // {
-    //     var pdfa_engine = ParallelDfaSimulatorEngine.init();
-    //     defer pdfa_engine.deinit();
-    //     const pdfa = try pdfa_engine.compilePattern(allocator, pattern);
-    //     defer pdfa_engine.destroyCompiledPattern(allocator, pdfa);
-
-    //     var i: usize = 0;
-    //     while (i < input.len) : (i += 128) {
-    //         var state = pdfa.pdfa.initial(input[i]);
-    //         for (input[i..][1..128]) |sym| {
-    //             state = pdfa.pdfa.merge(state, pdfa.pdfa.initial(sym));
-    //         }
-
-    //         const mapped = switch (state) {
-    //             .reject => 0,
-    //             else => @intFromEnum(state) + 1,
-    //         };
-
-    //         std.debug.print("{} ", .{mapped});
-    //         // return pdfa.isAccepting(state);
-    //     }
-    //     std.debug.print("\n", .{});
-    // }
-
-    // const input = try allocator.alloc(u8, 1024 * 1024 * 1024);
-    // defer allocator.free(input);
-    // for (input, 0..) |*x, i| {
-    //     x.* = @intCast(i % 37 + '0');
-    // }
-    // // input[1024 * 1024 * 76 - 16624] = '\xFE';
     const generation = timer.lap();
     std.debug.print("input generation: {}us\n", .{generation / std.time.ns_per_us});
 

@@ -8,12 +8,12 @@ pub const c = struct {
     const CUDA_ERROR_SHARED_OBJECT_INIT_FAILED = 303;
 
     const CUresult = c_uint;
-    const CUmodule = *opaque{};
-    const CUfunction = *opaque{};
-    const CUstream = *opaque{};
-    const CUevent = *opaque{};
-    const CUdevice = *opaque{};
-    const CUcontext = *opaque{};
+    const CUmodule = *opaque {};
+    const CUfunction = *opaque {};
+    const CUstream = *opaque {};
+    const CUevent = *opaque {};
+    const CUdevice = *opaque {};
+    const CUcontext = *opaque {};
 
     pub extern fn cuGetErrorName(err: CUresult, msg: *[*:0]const u8) CUresult;
     pub extern fn cuInit(flags: c_uint) CUresult;
@@ -53,7 +53,7 @@ pub fn unexpected(err: c_uint) noreturn {
         c.CUDA_SUCCESS => {},
         else => unreachable,
     }
-    std.log.err("unexpected cuda result: {s} ({})", .{msg, err});
+    std.log.err("unexpected cuda result: {s} ({})", .{ msg, err });
     unreachable;
 }
 
@@ -95,8 +95,8 @@ pub fn malloc(comptime T: type, n: usize) ![]T {
 }
 
 pub fn free(ptr: anytype) void {
-    const actual_ptr = switch (@typeInfo(@TypeOf(ptr)).Pointer.size) {
-        .Slice => ptr.ptr,
+    const actual_ptr = switch (@typeInfo(@TypeOf(ptr)).pointer.size) {
+        .slice => ptr.ptr,
         else => ptr,
     };
 
@@ -126,7 +126,7 @@ pub fn memcpy(comptime T: type, dst: []T, src: []const T, direction: CopyDir) vo
         )) {
             c.CUDA_SUCCESS => {},
             else => |err| unexpected(err),
-        }
+        },
     }
 }
 
@@ -180,7 +180,7 @@ pub const Function = struct {
     ) void {
         var args_buf: [args.len]?*anyopaque = undefined;
         inline for (&args_buf, 0..) |*arg_buf, i| {
-            arg_buf.* = @constCast(@ptrCast(&args[i]));
+            arg_buf.* = @ptrCast(@constCast(&args[i]));
         }
 
         switch (c.cuLaunchKernel(

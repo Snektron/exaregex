@@ -192,7 +192,7 @@ const Context = struct {
     /// processed element for this.
     queue_index: StateSet.Storage.Ref = 0,
     /// Queue of yet-to-be processed items during closure computation.
-    closure_queue: std.fifo.LinearFifo(Nfa.StateRef, .Slice),
+    closure_queue: std.Deque(Nfa.StateRef),
 
     /// Just steal the allocator from the DFA builder.
     fn allocator(self: Context) Allocator {
@@ -224,14 +224,14 @@ const Context = struct {
 
     /// Move over all epsilon symbols in a set.
     fn closure(self: *Context, set: *StateSet) void {
-        assert(self.closure_queue.readableLength() == 0);
+        assert(self.closure_queue.len == 0);
 
         var it = set.iterator();
         while (it.next()) |state| {
-            self.closure_queue.writeItemAssumeCapacity(state);
+            self.closure_queue.pushBackAssumeCapacity(state);
         }
 
-        while (self.closure_queue.readItem()) |src| {
+        while (self.closure_queue.popFront()) |src| {
             for (self.nfa.outgoing(src)) |tx| {
                 if (set.contains(tx.dst)) {
                     // Already processed or queued.
@@ -241,7 +241,7 @@ const Context = struct {
                     break;
                 }
                 set.insert(tx.dst);
-                self.closure_queue.writeItemAssumeCapacity(tx.dst);
+                self.closure_queue.pushBackAssumeCapacity(tx.dst);
             }
         }
     }
@@ -296,7 +296,7 @@ pub fn subset(a: Allocator, nfa: Nfa, opts: Options) !Dfa {
         .nfa = nfa,
         .b = Dfa.Builder.init(tmp_allocator),
         .state_sets = StateSet.Storage.init(nfa.states.len),
-        .closure_queue = std.fifo.LinearFifo(Nfa.StateRef, .Slice).init(closure_queue_mem),
+        .closure_queue = std.Deque(Nfa.StateRef).initBuffer(closure_queue_mem),
     };
     defer ctx.b.deinit();
     defer ctx.state_sets.deinit(tmp_allocator);

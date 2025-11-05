@@ -241,7 +241,6 @@ const utf8tests = Case{
     },
 };
 
-
 const cases = [_]Case{
     .{
         .pattern = "",
@@ -414,7 +413,7 @@ pub fn testEngineFuzzUtf8(comptime Engine: type, engine: *Engine) !void {
         const match = try engine.matches(compiled, input);
         std.debug.print("case {}: {s} (expected {s})\n", .{ i, if (match) "accept" else "reject", if (accept) "accept" else "reject" });
         if (match != accept) {
-            std.debug.print("case {}: invalid utf-8 match result with seed {}\n", .{i, seed});
+            std.debug.print("case {}: invalid utf-8 match result with seed {}\n", .{ i, seed });
             // std.debug.print("input: {s}\n", .{input});
             std.debug.print("expected valid: {}\n", .{accept});
             return error.InvalidMatchResult;

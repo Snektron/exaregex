@@ -43,7 +43,7 @@ inline fn merge(
 inline fn blockLoad(
     comptime T: type,
     comptime n: usize,
-    global: *const align(16) addrspace(.global) [n]T,
+    global: *align(16) addrspace(.global) const [n]T,
 ) [n]T {
     const max_load_width = @sizeOf(u128);
     const total_size = n * @sizeOf(T);
@@ -54,7 +54,7 @@ inline fn blockLoad(
     var local: [n]T align(16) = undefined;
 
     const local_casted: *[loads]LoadType = @ptrCast(&local);
-    const global_casted: *const addrspace(.global) [loads]LoadType = @ptrCast(global);
+    const global_casted: *addrspace(.global) const [loads]LoadType = @ptrCast(global);
     @memcpy(local_casted, global_casted);
 
     return local;
@@ -94,12 +94,23 @@ inline fn blockReduceLimit(
 inline fn syncthreads() void {
     switch (builtin.cpu.arch) {
         .amdgcn => {
-            asm volatile (
-                \\s_waitcnt lgkmcnt(0)
-                \\s_barrier
-                \\s_waitcnt lgkmcnt(0)
-                ::: "memory"
-            );
+            // gfx12
+            if (comptime std.mem.startsWith(u8, builtin.cpu.model.name, "gfx12")) {
+                asm volatile (
+                    // Sync shared memory
+                    \\s_wait_dscnt 0x0
+                    \\s_barrier_signal -1
+                    \\s_barrier_wait -1
+                    // Sync global memory. Not needed right now...
+                    // \\global_inv scope:SCOPE_SE
+                    ::: .{ .memory = true });
+            } else {
+                // pre-gfx12
+                asm volatile (
+                    \\s_waitcnt lgkmcnt(0)
+                    \\s_barrier
+                    ::: .{ .memory = true });
+            }
         },
         .nvptx, .nvptx64 => {
             asm volatile (
@@ -118,7 +129,7 @@ fn initial(
     input_size: u32,
     output: [*]align(16) addrspace(.global) u8,
     counter: *addrspace(.global) i32,
-) callconv(.Kernel) void {
+) callconv(.kernel) void {
     const thread_id = @workItemId(0);
 
     // Read the initial and merge tables into their shared storage.
@@ -138,7 +149,7 @@ fn initial(
 
     syncthreads();
 
-    const shared_counter: *volatile addrspace(.shared) i32 = &initial_storage.counter;
+    const shared_counter: *addrspace(.shared) volatile i32 = &initial_storage.counter;
 
     while (true) {
         if (thread_id == 0) {
@@ -159,7 +170,7 @@ fn initial(
 
         const block_state = if (is_aligned_block) blk: {
             comptime std.debug.assert(items_per_thread % 16 == 0);
-            const in = blockLoad(u8, items_per_thread, @alignCast(input[global_id * items_per_thread..][0..items_per_thread]));
+            const in = blockLoad(u8, items_per_thread, @alignCast(input[global_id * items_per_thread ..][0..items_per_thread]));
 
             // Apply initial mapping
             var states: [items_per_thread]StateRef = undefined;
@@ -224,7 +235,7 @@ fn reduce(
     input: [*]addrspace(.global) const StateRef,
     input_size: u32,
     output: [*]addrspace(.global) StateRef,
-) callconv(.Kernel) void {
+) callconv(.kernel) void {
     const thread_id = @workItemId(0);
     const block_id = @workGroupId(0);
     const global_id = block_id * block_size + thread_id;
@@ -241,9 +252,8 @@ fn reduce(
 
     const is_aligned_block = (block_id + 1) * items_per_block <= input_size;
     const block_state = if (is_aligned_block) blk: {
-
         comptime std.debug.assert(items_per_thread % 16 == 0);
-        const states = blockLoad(StateRef, items_per_thread, @alignCast(input[global_id * items_per_thread..][0..items_per_thread]));
+        const states = blockLoad(StateRef, items_per_thread, @alignCast(input[global_id * items_per_thread ..][0..items_per_thread]));
 
         var local_result_state: StateRef = states[0];
         for (1..items_per_thread) |i| {
@@ -290,8 +300,8 @@ fn reduce(
 comptime {
     switch (builtin.cpu.arch) {
         .amdgcn, .nvptx, .nvptx64 => {
-            @export(initial, .{ .name = "initial" });
-            @export(reduce, .{ .name = "reduce" });
+            @export(&initial, .{ .name = "initial" });
+            @export(&reduce, .{ .name = "reduce" });
         },
         else => {},
     }

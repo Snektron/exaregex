@@ -11,8 +11,7 @@ pub fn unexpected(err: c_uint) noreturn {
     unreachable;
 }
 
-pub fn init() void {
-}
+pub fn init() void {}
 
 pub fn malloc(comptime T: type, n: usize) ![]T {
     var result: [*]T = undefined;
@@ -27,8 +26,8 @@ pub fn malloc(comptime T: type, n: usize) ![]T {
 }
 
 pub fn free(ptr: anytype) void {
-    const actual_ptr = switch (@typeInfo(@TypeOf(ptr)).Pointer.size) {
-        .Slice => ptr.ptr,
+    const actual_ptr = switch (@typeInfo(@TypeOf(ptr)).pointer.size) {
+        .slice => ptr.ptr,
         else => ptr,
     };
 
@@ -114,7 +113,7 @@ pub const Function = struct {
     ) void {
         var args_buf: [args.len]?*anyopaque = undefined;
         inline for (&args_buf, 0..) |*arg_buf, i| {
-            arg_buf.* = @constCast(@ptrCast(&args[i]));
+            arg_buf.* = @ptrCast(@constCast(&args[i]));
         }
 
         switch (c.hipModuleLaunchKernel(

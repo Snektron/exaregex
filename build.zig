@@ -21,9 +21,11 @@ pub fn build(b: *std.Build) void {
 
     const exe = b.addExecutable(.{
         .name = "exaregex",
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
     exe.root_module.addImport("opencl", opencl);
     exe.linkLibC();
@@ -40,11 +42,7 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_exe.step);
 
-    const tests = b.addTest(.{
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
+    const tests = b.addTest(.{ .root_module = exe.root_module });
 
     tests.root_module.addImport("opencl", opencl);
     tests.linkLibC();
@@ -65,11 +63,14 @@ pub fn build(b: *std.Build) void {
 
             const hip = b.dependency("hip", .{});
 
-            const amdgcn_code = b.addSharedLibrary(.{
+            const amdgcn_code = b.addLibrary(.{
                 .name = "match-kernel",
-                .root_source_file = b.path("src/engine/match.zig"),
-                .target = amdgcn_target,
-                .optimize = .ReleaseFast,
+                .linkage = .dynamic,
+                .root_module = b.createModule(.{
+                    .root_source_file = b.path("src/engine/match.zig"),
+                    .target = amdgcn_target,
+                    .optimize = .ReleaseFast,
+                }),
             });
             amdgcn_code.linker_allow_shlib_undefined = false;
             amdgcn_code.bundle_compiler_rt = false;
@@ -82,7 +83,7 @@ pub fn build(b: *std.Build) void {
             const dis_step = b.step("dis", "disassemble HIP kernel");
             dis_step.dependOn(&dis.step);
 
-            exe.addIncludePath(hip.path("include"));
+            exe.addIncludePath(.{ .cwd_relative = "/opt/rocm/include" });
             exe.addLibraryPath(.{ .cwd_relative = "/opt/rocm/lib" });
             exe.linkSystemLibrary("amdhip64");
             exe.root_module.addAnonymousImport("match-module", .{
@@ -103,11 +104,14 @@ pub fn build(b: *std.Build) void {
                 .cpu_features = nvptx_mcpu,
             }) catch unreachable);
 
-            const nvptx_code = b.addSharedLibrary(.{
+            const nvptx_code = b.addLibrary(.{
                 .name = "match-kernel",
-                .root_source_file = b.path("src/engine/match.zig"),
-                .target = nvptx_target,
-                .optimize = .ReleaseFast,
+                .linkage = .dynamic,
+                .root_module = b.createModule(.{
+                    .root_source_file = b.path("src/engine/match.zig"),
+                    .target = nvptx_target,
+                    .optimize = .ReleaseFast,
+                }),
             });
             nvptx_code.linker_allow_shlib_undefined = false;
             nvptx_code.bundle_compiler_rt = false;
