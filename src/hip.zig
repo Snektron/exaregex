@@ -63,6 +63,17 @@ pub fn memcpy(comptime T: type, dst: []T, src: []const T, direction: CopyDir) vo
     }
 }
 
+pub fn memset(comptime T: type, dst: []T, val: u8) void {
+    switch (c.hipMemset(
+        dst.ptr,
+        val,
+        dst.len,
+    )) {
+        c.hipSuccess => {},
+        else => |err| unexpected(err),
+    }
+}
+
 pub const Module = struct {
     handle: c.hipModule_t,
 

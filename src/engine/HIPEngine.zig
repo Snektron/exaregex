@@ -187,13 +187,16 @@ pub fn matches(self: *HIPEngine, pattern: CompiledPattern, input: []const u8) !b
 
     if (events) |es| es.start.record(null);
 
-    const compute_units = 200; // TODO: Get this from somewhere
+    const compute_units = 96 * 2; // TODO: Get this from somewhere
     const blocks: u32 = @intCast(std.math.divCeil(usize, input.len, items_per_block) catch unreachable);
 
     const output_size = blocks;
 
     // std.log.debug("compute units: {}", .{compute_units});
     // std.log.debug("work size: {}", .{blocks});
+
+    const d_cache_buster = try hip.malloc(u8, 256 * 1024 * 1024);
+    defer hip.free(d_cache_buster);
 
     var d_input = try hip.malloc(u8, input.len);
     defer hip.free(d_input);
@@ -206,6 +209,8 @@ pub fn matches(self: *HIPEngine, pattern: CompiledPattern, input: []const u8) !b
     defer hip.free(d_counter);
     const i_blocks: i32 = @intCast(blocks);
     hip.memcpy(i32, d_counter, (&i_blocks)[0..1], .host_to_device);
+
+    hip.memset(u8, d_cache_buster, 0xFF);
 
     if (events) |es| es.upload.record(null);
 
@@ -224,9 +229,6 @@ pub fn matches(self: *HIPEngine, pattern: CompiledPattern, input: []const u8) !b
             d_counter.ptr,
         },
     );
-
-    _ = &d_input;
-    _ = &d_output;
 
     var size: u32 = output_size;
     while (size > 1) {
@@ -268,11 +270,10 @@ pub fn matches(self: *HIPEngine, pattern: CompiledPattern, input: []const u8) !b
         stats.kernel.addHit(hip.Event.elapsed(es.upload, es.match));
         stats.download.addHit(hip.Event.elapsed(es.match, es.download));
 
-        // const elapsed = hip.Event.elapsed(begin, end);
+        // const elapsed = hip.Event.elapsed(es.upload, es.match);
         // std.log.debug("result: {}", .{result});
         // std.log.debug("kernel runtime: {d:.2}us", .{elapsed * std.time.us_per_ms});
         // std.log.debug("kernel throughput: {d:.2} GB/s", .{@as(f32, @floatFromInt(input.len)) / (elapsed / std.time.ms_per_s) / 1000_000_000});
-
     }
 
     const result_state = switch (result) {
